@@ -168,7 +168,7 @@ const DB_COMMANDS: [&str; 9] = [
     "housekeeping",
 ];
 
-const CHAT_COMMANDS: [&str; 27] = [
+const CHAT_COMMANDS: [&str; 28] = [
     "listchats",
     "listarchived",
     "chat",
@@ -196,6 +196,7 @@ const CHAT_COMMANDS: [&str; 27] = [
     "pin",
     "unpin",
     "delchat",
+    "export-chat",
 ];
 const MESSAGE_COMMANDS: [&str; 6] = [
     "listmsgs",
