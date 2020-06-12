@@ -15,9 +15,10 @@ use crate::message::{Message, MsgId};
 use crate::mimeparser::SystemMessage;
 use crate::param::*;
 use crate::stock::StockMessage;
+use serde::Serialize;
 
 /// Location record
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct Location {
     pub location_id: u32,
     pub latitude: f64,
