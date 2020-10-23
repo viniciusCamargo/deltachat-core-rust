@@ -865,6 +865,12 @@ impl Chat {
             if !image_rel.is_empty() {
                 return Some(dc_get_abs_path(context, image_rel));
             }
+        }
+
+        if self.typ == Chattype::Group {
+            if let Ok(image_rel) = get_group_icon(context).await {
+                return Some(dc_get_abs_path(context, image_rel));
+            }
         } else if self.typ == Chattype::Single {
             let contacts = get_chat_contacts(context, self.id).await;
             if let Some(contact_id) = contacts.first() {
@@ -1402,6 +1408,21 @@ pub(crate) async fn update_device_icon(context: &Context) -> Result<(), Error> {
         contact.update_param(context).await?;
     }
     Ok(())
+}
+
+pub(crate) async fn get_group_icon(context: &Context) -> Result<String, Error> {
+    if let Some(icon) = context.sql.get_raw_config(&context, "icon-group").await {
+        return Ok(icon);
+    }
+
+    let icon = include_bytes!("../assets/icon-group.png");
+    let blob = BlobObject::create(context, "icon-group.png".to_string(), icon).await?;
+    let icon = blob.as_name().to_string();
+    context
+        .sql
+        .set_raw_config(&context, "icon-group", Some(&icon))
+        .await?;
+    Ok(icon)
 }
 
 async fn update_special_chat_name(
