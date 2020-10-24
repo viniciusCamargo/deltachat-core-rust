@@ -512,7 +512,7 @@ impl Contact {
                     .get_rowid(context, "contacts", "addr", &addr)
                     .await?;
                 sth_modified = Modifier::Created;
-                info!(context, "added contact id={} addr={}", row_id, &addr);
+                info!(context, "added contact id={} addr={} origin={:?}", row_id, &addr, &origin);
             } else {
                 error!(context, "Cannot add contact.");
             }
