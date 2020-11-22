@@ -41,19 +41,23 @@ pub async fn save(context: &Context, namespace: Namespace, foreign_id: ChatId) -
     token
 }
 
-pub async fn lookup(context: &Context, namespace: Namespace, foreign_id: ChatId) -> Option<String> {
-    context
+pub async fn lookup(
+    context: &Context,
+    namespace: Namespace,
+    foreign_id: ChatId,
+) -> crate::sql::Result<Option<String>> {
+    let token = context
         .sql
         .query_get_value::<String>(
-            context,
             "SELECT token FROM tokens WHERE namespc=? AND foreign_id=?;",
             paramsv![namespace, foreign_id],
         )
-        .await
+        .await?;
+    Ok(token)
 }
 
 pub async fn lookup_or_new(context: &Context, namespace: Namespace, foreign_id: ChatId) -> String {
-    if let Some(token) = lookup(context, namespace, foreign_id).await {
+    if let Ok(Some(token)) = lookup(context, namespace, foreign_id).await {
         return token;
     }
 

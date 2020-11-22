@@ -254,7 +254,7 @@ impl Job {
         match smtp.send(context, recipients, message, job_id).await {
             Err(crate::smtp::send::Error::SendError(err)) => {
                 // Remote error, retry later.
-                warn!(context, "SMTP failed to send: {}", err);
+                warn!(context, "SMTP failed to send: {:?}", err);
                 self.pending_error = Some(err.to_string());
 
                 let res = match err {
@@ -376,11 +376,21 @@ impl Job {
         /* if there is a msg-id and it does not exist in the db, cancel sending.
         this happends if dc_delete_msgs() was called
         before the generated mime was sent out */
-        if 0 != self.foreign_id && !message::exists(context, MsgId::new(self.foreign_id)).await {
-            return Status::Finished(Err(format_err!(
-                "Not sending Message {} as it was deleted",
-                self.foreign_id
-            )));
+        if 0 != self.foreign_id {
+            match message::exists(context, MsgId::new(self.foreign_id)).await {
+                Ok(exists) => {
+                    if !exists {
+                        return Status::Finished(Err(format_err!(
+                            "Not sending Message {} as it was deleted",
+                            self.foreign_id
+                        )));
+                    }
+                }
+                Err(err) => {
+                    warn!(context, "failed to check message existence: {:?}", err);
+                    return Status::RetryLater;
+                }
+            }
         };
 
         let foreign_id = self.foreign_id;
@@ -388,7 +398,7 @@ impl Job {
             async move {
                 // smtp success, update db ASAP, then delete smtp file
                 if 0 != foreign_id {
-                    set_delivered(context, MsgId::new(foreign_id)).await;
+                    set_delivered(context, MsgId::new(foreign_id)).await?;
                 }
                 // now also delete the generated file
                 dc_delete_file(context, filename).await;
@@ -442,7 +452,8 @@ impl Job {
     }
 
     async fn send_mdn(&mut self, context: &Context, smtp: &mut Smtp) -> Status {
-        if !context.get_config_bool(Config::MdnsEnabled).await {
+        let mdns_enabled = job_try!(context.get_config_bool(Config::MdnsEnabled).await);
+        if !mdns_enabled {
             // User has disabled MDNs after job scheduling but before
             // execution.
             return Status::Finished(Err(format_err!("MDNs are disabled")));
@@ -511,7 +522,7 @@ impl Job {
         }
 
         let msg = job_try!(Message::load_from_db(context, MsgId::new(self.foreign_id)).await);
-        let dest_folder = context.get_config(Config::ConfiguredMvboxFolder).await;
+        let dest_folder = job_try!(context.get_config(Config::ConfiguredMvboxFolder).await);
 
         if let Some(dest_folder) = dest_folder {
             let server_folder = msg.server_folder.as_ref().unwrap();
@@ -630,7 +641,7 @@ impl Job {
     /// Then, Fetch the last messages DC_FETCH_EXISTING_MSGS_COUNT emails from the server
     /// and show them in the chat list.
     async fn fetch_existing_msgs(&mut self, context: &Context, imap: &mut Imap) -> Status {
-        if context.get_config_bool(Config::Bot).await {
+        if job_try!(context.get_config_bool(Config::Bot).await) {
             return Status::Finished(Ok(())); // Bots don't want those messages
         }
         if let Err(err) = imap.connect_configured(context).await {
@@ -642,13 +653,13 @@ impl Job {
         add_all_recipients_as_contacts(context, imap, Config::ConfiguredMvboxFolder).await;
         add_all_recipients_as_contacts(context, imap, Config::ConfiguredInboxFolder).await;
 
-        if context.get_config_bool(Config::FetchExistingMsgs).await {
+        if job_try!(context.get_config_bool(Config::FetchExistingMsgs).await) {
             for config in &[
                 Config::ConfiguredMvboxFolder,
                 Config::ConfiguredInboxFolder,
                 Config::ConfiguredSentboxFolder,
             ] {
-                if let Some(folder) = context.get_config(*config).await {
+                if let Some(folder) = job_try!(context.get_config(*config).await) {
                     if let Err(e) = imap.fetch_new_messages(context, folder, true).await {
                         // We are using Anyhow's .context() and to show the inner error, too, we need the {:#}:
                         warn!(context, "Could not fetch messages, retrying: {:#}", e);
@@ -661,7 +672,9 @@ impl Job {
         // Make sure that if there now is a chat with a contact (created by an outgoing message), then group contact requests
         // from this contact should also be unblocked.
         // See https://github.com/deltachat/deltachat-core-rust/issues/2097.
-        for item in chat::get_chat_msgs(context, ChatId::new(DC_CHAT_ID_DEADDROP), 0, None).await {
+        for item in
+            job_try!(chat::get_chat_msgs(context, ChatId::new(DC_CHAT_ID_DEADDROP), 0, None).await)
+        {
             if let ChatItem::Message { msg_id } = item {
                 let msg = match Message::load_from_db(context, msg_id).await {
                     Err(e) => {
@@ -712,26 +725,21 @@ impl Job {
             return Status::RetryLater;
         }
 
-        if let Some(sentbox_folder) = &context.get_config(Config::ConfiguredSentboxFolder).await {
-            job_try!(
-                imap.resync_folder_uids(context, sentbox_folder.to_string())
-                    .await
-            );
+        let sentbox_folder = job_try!(context.get_config(Config::ConfiguredSentboxFolder).await);
+        if let Some(sentbox_folder) = sentbox_folder {
+            job_try!(imap.resync_folder_uids(context, sentbox_folder).await);
         }
 
-        if let Some(inbox_folder) = &context.get_config(Config::ConfiguredInboxFolder).await {
-            job_try!(
-                imap.resync_folder_uids(context, inbox_folder.to_string())
-                    .await
-            );
+        let inbox_folder = job_try!(context.get_config(Config::ConfiguredInboxFolder).await);
+        if let Some(inbox_folder) = inbox_folder {
+            job_try!(imap.resync_folder_uids(context, inbox_folder).await);
         }
 
-        if let Some(mvbox_folder) = &context.get_config(Config::ConfiguredMvboxFolder).await {
-            job_try!(
-                imap.resync_folder_uids(context, mvbox_folder.to_string())
-                    .await
-            );
+        let mvbox_folder = job_try!(context.get_config(Config::ConfiguredMvboxFolder).await);
+        if let Some(mvbox_folder) = mvbox_folder {
+            job_try!(imap.resync_folder_uids(context, mvbox_folder).await);
         }
+
         Status::Finished(Ok(()))
     }
 
@@ -778,11 +786,13 @@ impl Job {
                 // the name sent in the From field by the user.
                 if msg.param.get_bool(Param::WantsMdn).unwrap_or_default()
                     && !msg.is_system_message()
-                    && context.get_config_bool(Config::MdnsEnabled).await
                 {
-                    if let Err(err) = send_mdn(context, &msg).await {
-                        warn!(context, "could not send out mdn for {}: {}", msg.id, err);
-                        return Status::Finished(Err(err));
+                    let mdns_enabled = job_try!(context.get_config_bool(Config::MdnsEnabled).await);
+                    if mdns_enabled {
+                        if let Err(err) = send_mdn(context, &msg).await {
+                            warn!(context, "could not send out mdn for {}: {}", msg.id, err);
+                            return Status::Finished(Err(err));
+                        }
                     }
                 }
                 Status::Finished(Ok(()))
@@ -823,22 +833,19 @@ pub async fn action_exists(context: &Context, action: Action) -> bool {
         .unwrap_or_default()
 }
 
-async fn set_delivered(context: &Context, msg_id: MsgId) {
+async fn set_delivered(context: &Context, msg_id: MsgId) -> Result<()> {
     message::update_msg_state(context, msg_id, MessageState::OutDelivered).await;
     let chat_id: ChatId = context
         .sql
-        .query_get_value(
-            context,
-            "SELECT chat_id FROM msgs WHERE id=?",
-            paramsv![msg_id],
-        )
-        .await
+        .query_get_value("SELECT chat_id FROM msgs WHERE id=?", paramsv![msg_id])
+        .await?
         .unwrap_or_default();
     context.emit_event(EventType::MsgDelivered { chat_id, msg_id });
+    Ok(())
 }
 
 async fn add_all_recipients_as_contacts(context: &Context, imap: &mut Imap, folder: Config) {
-    let mailbox = if let Some(m) = context.get_config(folder).await {
+    let mailbox = if let Ok(Some(m)) = context.get_config(folder).await {
         m
     } else {
         return;
@@ -907,14 +914,14 @@ pub async fn send_msg_job(context: &Context, msg_id: MsgId) -> Result<Option<Job
 
     let from = context
         .get_config(Config::ConfiguredAddr)
-        .await
+        .await?
         .unwrap_or_default();
     let lowercase_from = from.to_lowercase();
 
     // Send BCC to self if it is enabled and we are not going to
     // delete it immediately.
-    if context.get_config_bool(Config::BccSelf).await
-        && context.get_config_delete_server_after().await != Some(0)
+    if context.get_config_bool(Config::BccSelf).await?
+        && context.get_config_delete_server_after().await? != Some(0)
         && !recipients
             .iter()
             .any(|x| x.to_lowercase() == lowercase_from)
@@ -928,7 +935,7 @@ pub async fn send_msg_job(context: &Context, msg_id: MsgId) -> Result<Option<Job
             context,
             "message {} has no recipient, skipping smtp-send", msg_id
         );
-        set_delivered(context, msg_id).await;
+        set_delivered(context, msg_id).await?;
         return Ok(None);
     }
 
@@ -1131,7 +1138,7 @@ async fn perform_job_action(
         Action::MoveMsg => job.move_msg(context, connection.inbox()).await,
         Action::FetchExistingMsgs => job.fetch_existing_msgs(context, connection.inbox()).await,
         Action::Housekeeping => {
-            sql::housekeeping(context).await;
+            job_try!(sql::housekeeping(context).await);
             Status::Finished(Ok(()))
         }
     };

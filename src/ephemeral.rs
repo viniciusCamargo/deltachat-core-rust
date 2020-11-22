@@ -148,7 +148,7 @@ impl ChatId {
     pub async fn get_ephemeral_timer(self, context: &Context) -> Result<Timer, Error> {
         let timer = context
             .sql
-            .query_get_value_result(
+            .query_get_value(
                 "SELECT ephemeral_timer FROM chats WHERE id=?;",
                 paramsv![self],
             )
@@ -233,7 +233,7 @@ impl MsgId {
     pub(crate) async fn ephemeral_timer(self, context: &Context) -> crate::sql::Result<Timer> {
         let res = match context
             .sql
-            .query_get_value_result(
+            .query_get_value(
                 "SELECT ephemeral_timer FROM msgs WHERE id=?",
                 paramsv![self],
             )
@@ -288,7 +288,7 @@ pub(crate) async fn delete_expired_messages(context: &Context) -> Result<bool, E
         .await?
         > 0;
 
-    if let Some(delete_device_after) = context.get_config_delete_device_after().await {
+    if let Some(delete_device_after) = context.get_config_delete_device_after().await? {
         let self_chat_id = lookup_by_contact_id(context, DC_CONTACT_ID_SELF)
             .await
             .unwrap_or_default()
@@ -343,7 +343,7 @@ pub(crate) async fn delete_expired_messages(context: &Context) -> Result<bool, E
 pub async fn schedule_ephemeral_task(context: &Context) {
     let ephemeral_timestamp: Option<i64> = match context
         .sql
-        .query_get_value_result(
+        .query_get_value(
             "SELECT ephemeral_timestamp \
          FROM msgs \
          WHERE ephemeral_timestamp != 0 \
@@ -406,7 +406,7 @@ pub async fn schedule_ephemeral_task(context: &Context) {
 pub(crate) async fn load_imap_deletion_msgid(context: &Context) -> sql::Result<Option<MsgId>> {
     let now = time();
 
-    let threshold_timestamp = match context.get_config_delete_server_after().await {
+    let threshold_timestamp = match context.get_config_delete_server_after().await? {
         None => 0,
         Some(delete_server_after) => now - delete_server_after,
     };

@@ -17,10 +17,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     #[error("Envelope error: {}", _0)]
     EnvelopeError(#[from] async_smtp::error::Error),
-
     #[error("Send error: {}", _0)]
     SendError(#[from] async_smtp::smtp::error::Error),
-
     #[error("SMTP has no transport")]
     NoTransport,
 }
@@ -42,6 +40,8 @@ impl Smtp {
             &context
                 .get_config(Config::ConfiguredAddr)
                 .await
+                .ok()
+                .flatten()
                 .unwrap_or_default(),
         ) {
             if let Some(max_smtp_rcpt_to) = provider.max_smtp_rcpt_to {

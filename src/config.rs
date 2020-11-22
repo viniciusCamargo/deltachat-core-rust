@@ -8,6 +8,7 @@ use crate::chat::ChatId;
 use crate::constants::DC_VERSION_STR;
 use crate::context::Context;
 use crate::dc_tools::*;
+use crate::error::Result;
 use crate::events::EventType;
 use crate::job;
 use crate::message::MsgId;
@@ -139,55 +140,56 @@ pub enum Config {
 }
 
 impl Context {
-    pub async fn config_exists(&self, key: Config) -> bool {
-        self.sql.get_raw_config(self, key).await.is_some()
+    pub async fn config_exists(&self, key: Config) -> Result<bool> {
+        Ok(self.sql.get_raw_config(key).await?.is_some())
     }
 
     /// Get a configuration key. Returns `None` if no value is set, and no default value found.
-    pub async fn get_config(&self, key: Config) -> Option<String> {
+    pub async fn get_config(&self, key: Config) -> Result<Option<String>> {
         let value = match key {
             Config::Selfavatar => {
-                let rel_path = self.sql.get_raw_config(self, key).await;
+                let rel_path = self.sql.get_raw_config(key).await?;
                 rel_path.map(|p| dc_get_abs_path(self, &p).to_string_lossy().into_owned())
             }
             Config::SysVersion => Some((&*DC_VERSION_STR).clone()),
             Config::SysMsgsizeMaxRecommended => Some(format!("{}", RECOMMENDED_FILE_SIZE)),
             Config::SysConfigKeys => Some(get_config_keys_string()),
-            _ => self.sql.get_raw_config(self, key).await,
+            _ => self.sql.get_raw_config(key).await?,
         };
 
         if value.is_some() {
-            return value;
+            return Ok(value);
         }
 
         // Default values
         match key {
-            Config::Selfstatus => Some(self.stock_str(StockMessage::StatusLine).await.into_owned()),
-            Config::ConfiguredInboxFolder => Some("INBOX".to_owned()),
-            _ => key.get_str("default").map(|s| s.to_string()),
+            Config::Selfstatus => Ok(Some(
+                self.stock_str(StockMessage::StatusLine).await.into_owned(),
+            )),
+            Config::ConfiguredInboxFolder => Ok(Some("INBOX".to_owned())),
+            _ => Ok(key.get_str("default").map(|s| s.to_string())),
         }
     }
 
-    pub async fn get_config_int(&self, key: Config) -> i32 {
+    pub async fn get_config_int(&self, key: Config) -> Result<i32> {
         self.get_config(key)
             .await
-            .and_then(|s| s.parse().ok())
-            .unwrap_or_default()
+            .map(|s: Option<String>| s.and_then(|s| s.parse().ok()).unwrap_or_default())
     }
 
-    pub async fn get_config_bool(&self, key: Config) -> bool {
-        self.get_config_int(key).await != 0
+    pub async fn get_config_bool(&self, key: Config) -> Result<bool> {
+        Ok(self.get_config_int(key).await? != 0)
     }
 
     /// Gets configured "delete_server_after" value.
     ///
     /// `None` means never delete the message, `Some(0)` means delete
     /// at once, `Some(x)` means delete after `x` seconds.
-    pub async fn get_config_delete_server_after(&self) -> Option<i64> {
-        match self.get_config_int(Config::DeleteServerAfter).await {
-            0 => None,
-            1 => Some(0),
-            x => Some(x as i64),
+    pub async fn get_config_delete_server_after(&self) -> Result<Option<i64>> {
+        match self.get_config_int(Config::DeleteServerAfter).await? {
+            0 => Ok(None),
+            1 => Ok(Some(0)),
+            x => Ok(Some(x as i64)),
         }
     }
 
@@ -195,33 +197,36 @@ impl Context {
     ///
     /// `None` means never delete the message, `Some(x)` means delete
     /// after `x` seconds.
-    pub async fn get_config_delete_device_after(&self) -> Option<i64> {
-        match self.get_config_int(Config::DeleteDeviceAfter).await {
-            0 => None,
-            x => Some(x as i64),
+    pub async fn get_config_delete_device_after(&self) -> Result<Option<i64>> {
+        match self.get_config_int(Config::DeleteDeviceAfter).await? {
+            0 => Ok(None),
+            x => Ok(Some(x as i64)),
         }
     }
 
     /// Set the given config key.
     /// If `None` is passed as a value the value is cleared and set to the default if there is one.
-    pub async fn set_config(&self, key: Config, value: Option<&str>) -> crate::sql::Result<()> {
+    pub async fn set_config(&self, key: Config, value: Option<&str>) -> Result<()> {
         match key {
             Config::Selfavatar => {
                 self.sql
                     .execute("UPDATE contacts SET selfavatar_sent=0;", paramsv![])
                     .await?;
                 self.sql
-                    .set_raw_config_bool(self, "attach_selfavatar", true)
+                    .set_raw_config_bool("attach_selfavatar", true)
                     .await?;
                 match value {
                     Some(value) => {
                         let blob = BlobObject::new_from_path(&self, value).await?;
+
                         blob.recode_to_avatar_size(self).await?;
-                        self.sql
-                            .set_raw_config(self, key, Some(blob.as_name()))
-                            .await
+                        self.sql.set_raw_config(key, Some(blob.as_name())).await?;
+                        Ok(())
                     }
-                    None => self.sql.set_raw_config(self, key, None).await,
+                    None => {
+                        self.sql.set_raw_config(key, None).await?;
+                        Ok(())
+                    }
                 }
             }
             Config::Selfstatus => {
@@ -232,10 +237,15 @@ impl Context {
                     value
                 };
 
-                self.sql.set_raw_config(self, key, val).await
+                self.sql.set_raw_config(key, val).await?;
+                Ok(())
             }
             Config::DeleteDeviceAfter => {
-                let ret = self.sql.set_raw_config(self, key, value).await;
+                let ret = self
+                    .sql
+                    .set_raw_config(key, value)
+                    .await
+                    .map_err(Into::into);
                 // Force chatlist reload to delete old messages immediately.
                 self.emit_event(EventType::MsgsChanged {
                     msg_id: MsgId::new(0),
@@ -245,24 +255,33 @@ impl Context {
             }
             Config::Displayname => {
                 let value = value.map(improve_single_line_input);
-                self.sql.set_raw_config(self, key, value.as_deref()).await
+                self.sql.set_raw_config(key, value.as_deref()).await?;
+                Ok(())
             }
             Config::DeleteServerAfter => {
-                let ret = self.sql.set_raw_config(self, key, value).await;
+                let ret = self
+                    .sql
+                    .set_raw_config(key, value)
+                    .await
+                    .map_err(Into::into);
                 job::schedule_resync(self).await;
                 ret
             }
             Config::InboxWatch => {
-                if self.get_config(Config::InboxWatch).await.as_deref() != value {
+                if self.get_config(Config::InboxWatch).await?.as_deref() != value {
                     // If Inbox-watch is disabled and enabled again, do not fetch emails from in between.
                     // this avoids unexpected mass-downloads and -deletions (if delete_server_after is set)
-                    if let Some(inbox) = self.get_config(Config::ConfiguredInboxFolder).await {
-                        crate::imap::set_config_last_seen_uid(self, inbox, 0, 0).await;
+                    if let Some(inbox) = self.get_config(Config::ConfiguredInboxFolder).await? {
+                        crate::imap::set_config_last_seen_uid(self, inbox, 0, 0).await?;
                     }
                 }
-                self.sql.set_raw_config(self, key, value).await
+                self.sql.set_raw_config(key, value).await?;
+                Ok(())
             }
-            _ => self.sql.set_raw_config(self, key, value).await,
+            _ => {
+                self.sql.set_raw_config(key, value).await?;
+                Ok(())
+            }
         }
     }
 }
@@ -326,7 +345,7 @@ mod tests {
             .unwrap();
         assert!(avatar_blob.exists().await);
         assert!(std::fs::metadata(&avatar_blob).unwrap().len() < avatar_bytes.len() as u64);
-        let avatar_cfg = t.get_config(Config::Selfavatar).await;
+        let avatar_cfg = t.get_config(Config::Selfavatar).await.unwrap();
         assert_eq!(avatar_cfg, avatar_blob.to_str().map(|s| s.to_string()));
 
         let img = image::open(avatar_src).unwrap();
@@ -355,7 +374,7 @@ mod tests {
         t.set_config(Config::Selfavatar, Some(&avatar_src.to_str().unwrap()))
             .await
             .unwrap();
-        let avatar_cfg = t.get_config(Config::Selfavatar).await;
+        let avatar_cfg = t.get_config(Config::Selfavatar).await.unwrap();
         assert_eq!(avatar_cfg, avatar_src.to_str().map(|s| s.to_string()));
 
         let img = image::open(avatar_src).unwrap();
@@ -382,21 +401,21 @@ mod tests {
             std::fs::metadata(&avatar_blob).unwrap().len(),
             avatar_bytes.len() as u64
         );
-        let avatar_cfg = t.get_config(Config::Selfavatar).await;
+        let avatar_cfg = t.get_config(Config::Selfavatar).await.unwrap();
         assert_eq!(avatar_cfg, avatar_blob.to_str().map(|s| s.to_string()));
     }
 
     #[async_std::test]
     async fn test_media_quality_config_option() {
         let t = TestContext::new().await;
-        let media_quality = t.get_config_int(Config::MediaQuality).await;
+        let media_quality = t.get_config_int(Config::MediaQuality).await.unwrap();
         assert_eq!(media_quality, 0);
         let media_quality = constants::MediaQuality::from_i32(media_quality).unwrap_or_default();
         assert_eq!(media_quality, constants::MediaQuality::Balanced);
 
         t.set_config(Config::MediaQuality, Some("1")).await.unwrap();
 
-        let media_quality = t.get_config_int(Config::MediaQuality).await;
+        let media_quality = t.get_config_int(Config::MediaQuality).await.unwrap();
         assert_eq!(media_quality, 1);
         assert_eq!(constants::MediaQuality::Worse as i32, 1);
         let media_quality = constants::MediaQuality::from_i32(media_quality).unwrap_or_default();

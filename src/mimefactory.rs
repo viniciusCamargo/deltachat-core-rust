@@ -77,11 +77,11 @@ impl<'a, 'b> MimeFactory<'a, 'b> {
 
         let from_addr = context
             .get_config(Config::ConfiguredAddr)
-            .await
+            .await?
             .unwrap_or_default();
         let from_displayname = context
             .get_config(Config::Displayname)
-            .await
+            .await?
             .unwrap_or_default();
         let mut recipients = Vec::with_capacity(5);
         let mut req_mdn = false;
@@ -114,7 +114,7 @@ impl<'a, 'b> MimeFactory<'a, 'b> {
                 )
                 .await?;
 
-            if !msg.is_system_message() && context.get_config_bool(Config::MdnsEnabled).await {
+            if !msg.is_system_message() && context.get_config_bool(Config::MdnsEnabled).await? {
                 req_mdn = true;
             }
         }
@@ -144,7 +144,7 @@ impl<'a, 'b> MimeFactory<'a, 'b> {
             from_displayname,
             selfstatus: context
                 .get_config(Config::Selfstatus)
-                .await
+                .await?
                 .unwrap_or(default_str),
             recipients,
             timestamp: msg.timestamp_sort,
@@ -170,11 +170,11 @@ impl<'a, 'b> MimeFactory<'a, 'b> {
         let contact = Contact::load_from_db(context, msg.from_id).await?;
         let from_addr = context
             .get_config(Config::ConfiguredAddr)
-            .await
+            .await?
             .unwrap_or_default();
         let from_displayname = context
             .get_config(Config::Displayname)
-            .await
+            .await?
             .unwrap_or_default();
         let default_str = context
             .stock_str(StockMessage::StatusLine)
@@ -182,7 +182,7 @@ impl<'a, 'b> MimeFactory<'a, 'b> {
             .to_string();
         let selfstatus = context
             .get_config(Config::Selfstatus)
-            .await
+            .await?
             .unwrap_or(default_str);
         let timestamp = dc_create_smeared_timestamp(context).await;
 
@@ -212,7 +212,7 @@ impl<'a, 'b> MimeFactory<'a, 'b> {
         let self_addr = self
             .context
             .get_config(Config::ConfiguredAddr)
-            .await
+            .await?
             .ok_or_else(|| format_err!("Not configured"))?;
 
         let mut res = Vec::new();
@@ -292,18 +292,18 @@ impl<'a, 'b> MimeFactory<'a, 'b> {
         }
     }
 
-    async fn should_do_gossip(&self) -> bool {
+    async fn should_do_gossip(&self) -> Result<bool, Error> {
         match &self.loaded {
             Loaded::Message { chat } => {
                 // beside key- and member-changes, force re-gossip every 48 hours
-                let gossiped_timestamp = chat.get_gossiped_timestamp(self.context).await;
+                let gossiped_timestamp = chat.get_gossiped_timestamp(self.context).await?;
                 if time() > gossiped_timestamp + (2 * 24 * 60 * 60) {
-                    return true;
+                    Ok(true)
+                } else {
+                    Ok(self.msg.param.get_cmd() == SystemMessage::MemberAddedToGroup)
                 }
-
-                self.msg.param.get_cmd() == SystemMessage::MemberAddedToGroup
             }
-            Loaded::MDN { .. } => false,
+            Loaded::MDN { .. } => Ok(false),
         }
     }
 
@@ -337,8 +337,8 @@ impl<'a, 'b> MimeFactory<'a, 'b> {
         }
     }
 
-    async fn subject_str(&self) -> String {
-        match self.loaded {
+    async fn subject_str(&self) -> Result<String, Error> {
+        let subject = match self.loaded {
             Loaded::Message { ref chat } => {
                 if self.msg.param.get_cmd() == SystemMessage::AutocryptSetupMessage {
                     self.context
@@ -376,15 +376,15 @@ impl<'a, 'b> MimeFactory<'a, 'b> {
                             )
                         }
                         None => {
-                            let self_name = match self.context.get_config(Config::Displayname).await
-                            {
-                                Some(name) => name,
-                                None => self
-                                    .context
-                                    .get_config(Config::Addr)
-                                    .await
-                                    .unwrap_or_default(),
-                            };
+                            let self_name =
+                                match self.context.get_config(Config::Displayname).await? {
+                                    Some(name) => name,
+                                    None => self
+                                        .context
+                                        .get_config(Config::Addr)
+                                        .await?
+                                        .unwrap_or_default(),
+                                };
 
                             self.context
                                 .stock_string_repl_str(
@@ -401,7 +401,8 @@ impl<'a, 'b> MimeFactory<'a, 'b> {
                 .stock_str(StockMessage::ReadRcpt)
                 .await
                 .into_owned(),
-        }
+        };
+        Ok(subject)
     }
 
     pub fn recipients(&self) -> Vec<String> {
@@ -482,7 +483,7 @@ impl<'a, 'b> MimeFactory<'a, 'b> {
         let grpimage = self.grpimage();
         let force_plaintext = self.should_force_plaintext();
         let skip_autocrypt = self.should_skip_autocrypt();
-        let subject_str = self.subject_str().await;
+        let subject_str = self.subject_str().await?;
         let e2ee_guaranteed = self.is_e2ee_guaranteed();
         let encrypt_helper = EncryptHelper::new(self.context).await?;
 
@@ -549,7 +550,7 @@ impl<'a, 'b> MimeFactory<'a, 'b> {
 
         let outer_message = if is_encrypted {
             // Add gossip headers in chats with multiple recipients
-            if peerstates.len() > 1 && self.should_do_gossip().await {
+            if peerstates.len() > 1 && self.should_do_gossip().await? {
                 for peerstate in peerstates.iter().filter_map(|(state, _)| state.as_ref()) {
                     if peerstate.peek_key(min_verified).is_some() {
                         if let Some(header) = peerstate.render_gossip_header(min_verified) {
@@ -990,7 +991,7 @@ impl<'a, 'b> MimeFactory<'a, 'b> {
         }
 
         if self.attach_selfavatar {
-            match context.get_config(Config::Selfavatar).await {
+            match context.get_config(Config::Selfavatar).await? {
                 Some(path) => match build_selfavatar_file(context, &path) {
                     Ok((part, filename)) => {
                         parts.push(part);
@@ -1493,7 +1494,7 @@ mod tests {
                  \n", &t).await;
         let mf = MimeFactory::from_msg(&t, &new_msg, false).await.unwrap();
         // The subject string should not be "Re: message opened"
-        assert_eq!("Re: Hello, Charlie", mf.subject_str().await);
+        assert_eq!("Re: Hello, Charlie", mf.subject_str().await.unwrap());
     }
 
     async fn first_subject_str(t: TestContext) -> String {
@@ -1512,14 +1513,14 @@ mod tests {
 
         let mf = MimeFactory::from_msg(&t, &new_msg, false).await.unwrap();
 
-        mf.subject_str().await
+        mf.subject_str().await.unwrap()
     }
 
     async fn msg_to_subject_str(imf_raw: &[u8]) -> String {
         let t = TestContext::new_alice().await;
         let new_msg = incoming_msg_to_reply_msg(imf_raw, &t).await;
         let mf = MimeFactory::from_msg(&t, &new_msg, false).await.unwrap();
-        mf.subject_str().await
+        mf.subject_str().await.unwrap()
     }
 
     // Creates a `Message` that replies "Hi" to the incoming email in `imf_raw`.

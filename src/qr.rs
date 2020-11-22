@@ -706,20 +706,39 @@ mod tests {
     async fn test_set_config_from_qr() {
         let ctx = TestContext::new().await;
 
-        assert!(ctx.ctx.get_config(Config::WebrtcInstance).await.is_none());
+        assert!(ctx
+            .ctx
+            .get_config(Config::WebrtcInstance)
+            .await
+            .unwrap()
+            .is_none());
 
         let res = set_config_from_qr(&ctx.ctx, "badqr:https://example.org/").await;
         assert!(!res.is_ok());
-        assert!(ctx.ctx.get_config(Config::WebrtcInstance).await.is_none());
+        assert!(ctx
+            .ctx
+            .get_config(Config::WebrtcInstance)
+            .await
+            .unwrap()
+            .is_none());
 
         let res = set_config_from_qr(&ctx.ctx, "https://no.qr").await;
         assert!(!res.is_ok());
-        assert!(ctx.ctx.get_config(Config::WebrtcInstance).await.is_none());
+        assert!(ctx
+            .ctx
+            .get_config(Config::WebrtcInstance)
+            .await
+            .unwrap()
+            .is_none());
 
         let res = set_config_from_qr(&ctx.ctx, "dcwebrtc:https://example.org/").await;
         assert!(res.is_ok());
         assert_eq!(
-            ctx.ctx.get_config(Config::WebrtcInstance).await.unwrap(),
+            ctx.ctx
+                .get_config(Config::WebrtcInstance)
+                .await
+                .unwrap()
+                .unwrap(),
             "https://example.org/"
         );
 
@@ -727,7 +746,11 @@ mod tests {
             set_config_from_qr(&ctx.ctx, "DCWEBRTC:basicwebrtc:https://foo.bar/?$ROOM&test").await;
         assert!(res.is_ok());
         assert_eq!(
-            ctx.ctx.get_config(Config::WebrtcInstance).await.unwrap(),
+            ctx.ctx
+                .get_config(Config::WebrtcInstance)
+                .await
+                .unwrap()
+                .unwrap(),
             "basicwebrtc:https://foo.bar/?$ROOM&test"
         );
     }

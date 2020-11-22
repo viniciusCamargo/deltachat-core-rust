@@ -117,9 +117,16 @@ pub async fn dc_get_securejoin_qr(context: &Context, group_chat_id: ChatId) -> O
         token::lookup_or_new(context, token::Namespace::InviteNumber, group_chat_id).await;
     let auth = token::lookup_or_new(context, token::Namespace::Auth, group_chat_id).await;
     let self_addr = match context.get_config(Config::ConfiguredAddr).await {
-        Some(addr) => addr,
-        None => {
-            error!(context, "Not configured, cannot generate QR code.",);
+        Ok(Some(addr)) => addr,
+        Ok(None) => {
+            error!(context, "Not configured, cannot generate QR code.");
+            return None;
+        }
+        Err(err) => {
+            error!(
+                context,
+                "Unable to retrieve configuration, cannot generate QR code: {:?}", err
+            );
             return None;
         }
     };
@@ -127,6 +134,7 @@ pub async fn dc_get_securejoin_qr(context: &Context, group_chat_id: ChatId) -> O
     let self_name = context
         .get_config(Config::Displayname)
         .await
+        .ok()?
         .unwrap_or_default();
 
     let fingerprint: Fingerprint = match get_self_fingerprint(context).await {
@@ -1156,7 +1164,9 @@ mod tests {
 
         // Alice should not yet have Bob verified
         let contact_bob_id =
-            Contact::lookup_id_by_addr(&alice.ctx, "bob@example.net", Origin::Unknown).await;
+            Contact::lookup_id_by_addr(&alice.ctx, "bob@example.net", Origin::Unknown)
+                .await
+                .unwrap();
         let contact_bob = Contact::load_from_db(&alice.ctx, contact_bob_id)
             .await
             .unwrap();
@@ -1182,7 +1192,9 @@ mod tests {
 
         // Bob should not yet have Alice verified
         let contact_alice_id =
-            Contact::lookup_id_by_addr(&bob.ctx, "alice@example.com", Origin::Unknown).await;
+            Contact::lookup_id_by_addr(&bob.ctx, "alice@example.com", Origin::Unknown)
+                .await
+                .unwrap();
         let contact_alice = Contact::load_from_db(&bob.ctx, contact_alice_id)
             .await
             .unwrap();
@@ -1298,7 +1310,9 @@ mod tests {
 
         // Bob should not yet have Alice verified
         let contact_alice_id =
-            Contact::lookup_id_by_addr(&bob.ctx, "alice@example.com", Origin::Unknown).await;
+            Contact::lookup_id_by_addr(&bob.ctx, "alice@example.com", Origin::Unknown)
+                .await
+                .unwrap();
         let contact_alice = Contact::load_from_db(&bob.ctx, contact_alice_id)
             .await
             .unwrap();
@@ -1378,7 +1392,9 @@ mod tests {
 
         // Alice should not yet have Bob verified
         let contact_bob_id =
-            Contact::lookup_id_by_addr(&alice.ctx, "bob@example.net", Origin::Unknown).await;
+            Contact::lookup_id_by_addr(&alice.ctx, "bob@example.net", Origin::Unknown)
+                .await
+                .unwrap();
         let contact_bob = Contact::load_from_db(&alice.ctx, contact_bob_id)
             .await
             .unwrap();
@@ -1401,7 +1417,9 @@ mod tests {
 
         // Bob should not yet have Alice verified
         let contact_alice_id =
-            Contact::lookup_id_by_addr(&bob.ctx, "alice@example.com", Origin::Unknown).await;
+            Contact::lookup_id_by_addr(&bob.ctx, "alice@example.com", Origin::Unknown)
+                .await
+                .unwrap();
         let contact_alice = Contact::load_from_db(&bob.ctx, contact_alice_id)
             .await
             .unwrap();

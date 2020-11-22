@@ -261,10 +261,7 @@ impl<'a> Peerstate<'a> {
         if self.fingerprint_changed {
             if let Some(contact_id) = context
                 .sql
-                .query_get_value_result(
-                    "SELECT id FROM contacts WHERE addr=?;",
-                    paramsv![self.addr],
-                )
+                .query_get_value("SELECT id FROM contacts WHERE addr=?;", paramsv![self.addr])
                 .await?
             {
                 let (contact_chat_id, _) =

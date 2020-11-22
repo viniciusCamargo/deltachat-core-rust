@@ -187,7 +187,7 @@ impl Contact {
             res.name = context.stock_str(StockMessage::SelfMsg).await.to_string();
             res.addr = context
                 .get_config(Config::ConfiguredAddr)
-                .await
+                .await?
                 .unwrap_or_default();
         } else if contact_id == DC_CONTACT_ID_DEVICE {
             res.name = context
@@ -286,29 +286,30 @@ impl Contact {
         context: &Context,
         addr: impl AsRef<str>,
         min_origin: Origin,
-    ) -> u32 {
+    ) -> Result<u32> {
         if addr.as_ref().is_empty() {
-            return 0;
+            return Ok(0);
         }
 
         let addr_normalized = addr_normalize(addr.as_ref());
         let addr_self = context
             .get_config(Config::ConfiguredAddr)
-            .await
+            .await?
             .unwrap_or_default();
 
         if addr_cmp(addr_normalized, addr_self) {
-            return DC_CONTACT_ID_SELF;
+            return Ok(DC_CONTACT_ID_SELF);
         }
-        context.sql.query_get_value(
-            context,
+        let id = context.sql.query_get_value(
             "SELECT id FROM contacts WHERE addr=?1 COLLATE NOCASE AND id>?2 AND origin>=?3 AND blocked=0;",
             paramsv![
                 addr_normalized,
                 DC_CONTACT_ID_LAST_SPECIAL as i32,
                 min_origin as u32,
             ],
-        ).await.unwrap_or_default()
+        ).await?.unwrap_or_default();
+
+        Ok(id)
     }
 
     /// Lookup a contact and create it if it does not exist yet.
@@ -353,7 +354,7 @@ impl Contact {
         let addr = addr_normalize(addr.as_ref()).to_string();
         let addr_self = context
             .get_config(Config::ConfiguredAddr)
-            .await
+            .await?
             .unwrap_or_default();
 
         if addr_cmp(&addr, addr_self) {
@@ -453,10 +454,9 @@ impl Contact {
                     // Update the contact name also if it is used as a group name.
                     // This is one of the few duplicated data, however, getting the chat list is easier this way.
                     let chat_id = context.sql.query_get_value::<i32>(
-                        context,
                         "SELECT id FROM chats WHERE type=? AND id IN(SELECT chat_id FROM chats_contacts WHERE contact_id=?)",
                         paramsv![Chattype::Single, row_id]
-                    ).await;
+                    ).await?;
                     if let Some(chat_id) = chat_id {
                         match context.sql.execute("UPDATE chats SET name=? WHERE id=? AND name!=?1", paramsv![new_name, chat_id]).await {
                             Err(err) => warn!(context, "Can't update chat name: {}", err),
@@ -490,7 +490,7 @@ impl Contact {
             {
                 row_id = context
                     .sql
-                    .get_rowid(context, "contacts", "addr", &addr)
+                    .get_rowid("contacts", "addr", &addr)
                     .await?;
                 sth_modified = Modifier::Created;
                 info!(context, "added contact id={} addr={}", row_id, &addr);
@@ -562,7 +562,7 @@ impl Contact {
     ) -> Result<Vec<u32>> {
         let self_addr = context
             .get_config(Config::ConfiguredAddr)
-            .await
+            .await?
             .unwrap_or_default();
 
         let mut add_self = false;
@@ -610,7 +610,7 @@ impl Contact {
 
             let self_name = context
                 .get_config(Config::Displayname)
-                .await
+                .await?
                 .unwrap_or_default();
             let self_name2 = context.stock_str(StockMessage::SelfMsg);
 
@@ -647,16 +647,15 @@ impl Contact {
         Ok(ret)
     }
 
-    pub async fn get_blocked_cnt(context: &Context) -> usize {
-        context
+    pub async fn get_blocked_cnt(context: &Context) -> Result<usize> {
+        let count = context
             .sql
             .query_get_value::<isize>(
-                context,
                 "SELECT COUNT(*) FROM contacts WHERE id>? AND blocked!=0",
                 paramsv![DC_CONTACT_ID_LAST_SPECIAL as i32],
             )
-            .await
-            .unwrap_or_default() as usize
+            .await?;
+        Ok(count.unwrap_or_default() as usize)
     }
 
     /// Get blocked contacts.
@@ -686,7 +685,7 @@ impl Contact {
 
         if let Ok(contact) = Contact::load_from_db(context, contact_id).await {
             let peerstate = Peerstate::from_addr(context, &contact.addr).await?;
-            let loginparam = LoginParam::from_database(context, "configured_").await;
+            let loginparam = LoginParam::from_database(context, "configured_").await?;
 
             if peerstate.is_some()
                 && peerstate
@@ -760,22 +759,20 @@ impl Contact {
         let count_contacts: i32 = context
             .sql
             .query_get_value(
-                context,
                 "SELECT COUNT(*) FROM chats_contacts WHERE contact_id=?;",
                 paramsv![contact_id as i32],
             )
-            .await
+            .await?
             .unwrap_or_default();
 
         let count_msgs: i32 = if count_contacts > 0 {
             context
                 .sql
                 .query_get_value(
-                    context,
                     "SELECT COUNT(*) FROM msgs WHERE from_id=? OR to_id=?;",
                     paramsv![contact_id as i32, contact_id as i32],
                 )
-                .await
+                .await?
                 .unwrap_or_default()
         } else {
             0
@@ -896,17 +893,17 @@ impl Contact {
     /// Get the contact's profile image.
     /// This is the image set by each remote user on their own
     /// using dc_set_config(context, "selfavatar", image).
-    pub async fn get_profile_image(&self, context: &Context) -> Option<PathBuf> {
+    pub async fn get_profile_image(&self, context: &Context) -> Result<Option<PathBuf>> {
         if self.id == DC_CONTACT_ID_SELF {
-            if let Some(p) = context.get_config(Config::Selfavatar).await {
-                return Some(PathBuf::from(p));
+            if let Some(p) = context.get_config(Config::Selfavatar).await? {
+                return Ok(Some(PathBuf::from(p)));
             }
         } else if let Some(image_rel) = self.param.get(Param::ProfileImage) {
             if !image_rel.is_empty() {
-                return Some(dc_get_abs_path(context, image_rel));
+                return Ok(Some(dc_get_abs_path(context, image_rel)));
             }
         }
-        None
+        Ok(None)
     }
 
     /// Get a color for the contact.
@@ -987,20 +984,19 @@ impl Contact {
         false
     }
 
-    pub async fn get_real_cnt(context: &Context) -> usize {
+    pub async fn get_real_cnt(context: &Context) -> Result<usize> {
         if !context.sql.is_open().await {
-            return 0;
+            return Ok(0);
         }
 
-        context
+        let count = context
             .sql
             .query_get_value::<isize>(
-                context,
                 "SELECT COUNT(*) FROM contacts WHERE id>?;",
                 paramsv![DC_CONTACT_ID_LAST_SPECIAL as i32],
             )
-            .await
-            .unwrap_or_default() as usize
+            .await?;
+        Ok(count.unwrap_or_default() as usize)
     }
 
     pub async fn real_exists_by_id(context: &Context, contact_id: u32) -> bool {
@@ -1205,7 +1201,7 @@ impl Context {
     pub async fn is_self_addr(&self, addr: &str) -> Result<bool> {
         let self_addr = self
             .get_config(Config::ConfiguredAddr)
-            .await
+            .await?
             .ok_or_else(|| format_err!("Not configured"))?;
 
         Ok(addr_cmp(self_addr, addr))

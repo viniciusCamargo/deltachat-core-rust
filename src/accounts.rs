@@ -503,7 +503,10 @@ mod tests {
         let ctx = accounts.get_selected_account().await;
         assert_eq!(
             "me@mail.com",
-            ctx.get_config(crate::config::Config::Addr).await.unwrap()
+            ctx.get_config(crate::config::Config::Addr)
+                .await
+                .unwrap()
+                .unwrap()
         );
     }
 

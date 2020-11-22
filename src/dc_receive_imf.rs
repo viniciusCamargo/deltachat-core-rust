@@ -226,7 +226,7 @@ pub(crate) async fn dc_receive_imf_inner(
     }
 
     // Get user-configured server deletion
-    let delete_server_after = context.get_config_delete_server_after().await;
+    let delete_server_after = context.get_config_delete_server_after().await?;
 
     if !created_db_entries.is_empty() {
         if needs_delete_job || delete_server_after == Some(0) {
@@ -385,7 +385,7 @@ async fn add_parts(
     // incoming non-chat messages may be discarded
     let mut allow_creation = true;
     let show_emails =
-        ShowEmails::from_i32(context.get_config_int(Config::ShowEmails).await).unwrap_or_default();
+        ShowEmails::from_i32(context.get_config_int(Config::ShowEmails).await?).unwrap_or_default();
     if mime_parser.is_system_message != SystemMessage::AutocryptSetupMessage
         && is_dc_message == MessengerMessage::No
     {
@@ -763,7 +763,7 @@ async fn add_parts(
     // however, we cannot do this earlier as we need from_id to be set
     let in_fresh = state == MessageState::InFresh;
     let rcvd_timestamp = time();
-    let sort_timestamp = calc_sort_timestamp(context, *sent_timestamp, *chat_id, in_fresh).await;
+    let sort_timestamp = calc_sort_timestamp(context, *sent_timestamp, *chat_id, in_fresh).await?;
 
     // Ensure replies to messages are sorted after the parent message.
     //
@@ -782,7 +782,7 @@ async fn add_parts(
 
     // if the mime-headers should be saved, find out its size
     // (the mime-header ends with an empty line)
-    let save_mime_headers = context.get_config_bool(Config::SaveMimeHeaders).await;
+    let save_mime_headers = context.get_config_bool(Config::SaveMimeHeaders).await?;
     if let Some(raw) = mime_parser.get(HeaderDef::InReplyTo) {
         mime_in_reply_to = raw.clone();
     }
@@ -1025,7 +1025,7 @@ async fn calc_sort_timestamp(
     message_timestamp: i64,
     chat_id: ChatId,
     is_fresh_msg: bool,
-) -> i64 {
+) -> Result<i64> {
     let mut sort_timestamp = message_timestamp;
 
     // get newest non fresh message for this chat
@@ -1034,11 +1034,10 @@ async fn calc_sort_timestamp(
         let last_msg_time: Option<i64> = context
             .sql
             .query_get_value(
-                context,
                 "SELECT MAX(timestamp) FROM msgs WHERE chat_id=? AND state>?",
                 paramsv![chat_id, MessageState::InFresh],
             )
-            .await;
+            .await?;
 
         if let Some(last_msg_time) = last_msg_time {
             if last_msg_time > sort_timestamp {
@@ -1051,7 +1050,7 @@ async fn calc_sort_timestamp(
         sort_timestamp = dc_create_smeared_timestamp(context).await;
     }
 
-    sort_timestamp
+    Ok(sort_timestamp)
 }
 
 /// This function tries extracts the group-id from the message and returns the
@@ -1113,7 +1112,7 @@ async fn create_or_lookup_group(
     let mut removed_id = 0;
 
     if let Some(removed_addr) = mime_parser.get(HeaderDef::ChatGroupMemberRemoved).cloned() {
-        removed_id = Contact::lookup_id_by_addr(context, &removed_addr, Origin::Unknown).await;
+        removed_id = Contact::lookup_id_by_addr(context, &removed_addr, Origin::Unknown).await?;
         if removed_id == 0 {
             warn!(context, "removed {:?} has no contact_id", removed_addr);
         } else {
@@ -1207,7 +1206,7 @@ async fn create_or_lookup_group(
         .unwrap_or_default();
     let self_addr = context
         .get_config(Config::ConfiguredAddr)
-        .await
+        .await?
         .unwrap_or_default();
 
     if chat_id.is_unset()
@@ -1246,7 +1245,18 @@ async fn create_or_lookup_group(
             create_blocked,
             create_protected,
         )
-        .await;
+        .await
+        .unwrap_or_else(|err| {
+            warn!(
+                context,
+                "Failed to create group '{}' for grpid={}: {:?}",
+                grpname.as_ref().unwrap(),
+                grpid,
+                err,
+            );
+
+            ChatId::new(0)
+        });
         chat_id_blocked = create_blocked;
         recreate_member_list = true;
 
@@ -1502,7 +1512,16 @@ async fn create_or_lookup_adhoc_group(
 
     // create a new ad-hoc group
     // - there is no need to check if this group exists; otherwise we would have caught it above
-    let grpid = create_adhoc_grp_id(context, &member_ids).await;
+    let grpid = match create_adhoc_grp_id(context, &member_ids).await {
+        Ok(id) => id,
+        Err(err) => {
+            warn!(
+                context,
+                "failed to create ad-hoc grpid for {:?}: {:?}", member_ids, err
+            );
+            return Ok((ChatId::new(0), Blocked::Not));
+        }
+    };
     if grpid.is_empty() {
         warn!(
             context,
@@ -1510,6 +1529,7 @@ async fn create_or_lookup_adhoc_group(
         );
         return Ok((ChatId::new(0), Blocked::Not));
     }
+
     // use subject as initial chat name
     let grpname = mime_parser
         .get_subject()
@@ -1519,11 +1539,19 @@ async fn create_or_lookup_adhoc_group(
     let new_chat_id: ChatId = create_group_record(
         context,
         &grpid,
-        grpname,
+        &grpname,
         create_blocked,
         ProtectionStatus::Unprotected,
     )
-    .await;
+    .await
+    .unwrap_or_else(|err| {
+        warn!(
+            context,
+            "Failed to create group '{}' for grpid={}: {:?}", grpname, grpid, err,
+        );
+
+        ChatId::new(0)
+    });
     for &member_id in &member_ids {
         chat::add_to_chat_contacts_table(context, new_chat_id, member_id).await;
     }
@@ -1539,8 +1567,8 @@ async fn create_group_record(
     grpname: impl AsRef<str>,
     create_blocked: Blocked,
     create_protected: ProtectionStatus,
-) -> ChatId {
-    if context.sql.execute(
+) -> Result<ChatId> {
+    context.sql.execute(
         "INSERT INTO chats (type, name, grpid, blocked, created_timestamp, protected) VALUES(?, ?, ?, ?, ?, ?);",
         paramsv![
             Chattype::Group,
@@ -1550,20 +1578,11 @@ async fn create_group_record(
             time(),
             create_protected,
         ],
-    ).await
-    .is_err()
-    {
-        warn!(
-            context,
-            "Failed to create group '{}' for grpid={}",
-            grpname.as_ref(),
-            grpid.as_ref()
-        );
-        return ChatId::new(0);
-    }
+    ).await?;
+
     let row_id = context
         .sql
-        .get_rowid(context, "chats", "grpid", grpid.as_ref())
+        .get_rowid("chats", "grpid", grpid.as_ref())
         .await
         .unwrap_or_default();
 
@@ -1575,10 +1594,11 @@ async fn create_group_record(
         grpid.as_ref(),
         chat_id
     );
-    chat_id
+
+    Ok(chat_id)
 }
 
-async fn create_adhoc_grp_id(context: &Context, member_ids: &[u32]) -> String {
+async fn create_adhoc_grp_id(context: &Context, member_ids: &[u32]) -> Result<String> {
     /* algorithm:
     - sort normalized, lowercased, e-mail addresses alphabetically
     - put all e-mail addresses into a single string, separate the address by a single comma
@@ -1588,7 +1608,7 @@ async fn create_adhoc_grp_id(context: &Context, member_ids: &[u32]) -> String {
     let member_ids_str = join(member_ids.iter().map(|x| x.to_string()), ",");
     let member_cs = context
         .get_config(Config::ConfiguredAddr)
-        .await
+        .await?
         .unwrap_or_else(|| "no-self".to_string())
         .to_lowercase();
 
@@ -1615,7 +1635,7 @@ async fn create_adhoc_grp_id(context: &Context, member_ids: &[u32]) -> String {
         .await
         .unwrap_or(member_cs);
 
-    hex_hash(&members)
+    Ok(hex_hash(&members))
 }
 
 #[allow(clippy::indexing_slicing)]
@@ -2029,7 +2049,7 @@ mod tests {
     #[async_std::test]
     async fn test_adhoc_group_show_chats_only() {
         let t = TestContext::new_alice().await;
-        assert_eq!(t.get_config_int(Config::ShowEmails).await, 0);
+        assert_eq!(t.get_config_int(Config::ShowEmails).await.unwrap(), 0);
 
         let chats = Chatlist::try_load(&t, 0, None, None).await.unwrap();
         assert_eq!(chats.len(), 0);
@@ -2101,13 +2121,26 @@ mod tests {
         assert_eq!(chat.typ, Chattype::Single);
         assert_eq!(chat.name, "Bob");
         assert_eq!(chat::get_chat_contacts(&t, chat_id).await.len(), 1);
-        assert_eq!(chat::get_chat_msgs(&t, chat_id, 0, None).await.len(), 1);
+        assert_eq!(
+            chat::get_chat_msgs(&t, chat_id, 0, None)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
 
         // receive a non-delta-message from Bob, shows up because of the show_emails setting
         dc_receive_imf(&t, ONETOONE_NOREPLY_MAIL, "INBOX", 2, false)
             .await
             .unwrap();
-        assert_eq!(chat::get_chat_msgs(&t, chat_id, 0, None).await.len(), 2);
+
+        assert_eq!(
+            chat::get_chat_msgs(&t, chat_id, 0, None)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
 
         // let Bob create an adhoc-group by a non-delta-message, shows up because of the show_emails setting
         dc_receive_imf(&t, GRP_MAIL, "INBOX", 3, false)
@@ -2164,7 +2197,13 @@ mod tests {
             .await
             .unwrap();
         chat::add_contact_to_chat(&t, group_id, bob_id).await;
-        assert_eq!(chat::get_chat_msgs(&t, group_id, 0, None).await.len(), 0);
+        assert_eq!(
+            chat::get_chat_msgs(&t, group_id, 0, None)
+                .await
+                .unwrap()
+                .len(),
+            0
+        );
         group_id
             .set_visibility(&t, ChatVisibility::Archived)
             .await
@@ -2205,7 +2244,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let msgs = chat::get_chat_msgs(&t, group_id, 0, None).await;
+        let msgs = chat::get_chat_msgs(&t, group_id, 0, None).await.unwrap();
         assert_eq!(msgs.len(), 1);
         let msg_id = if let ChatItem::Message { msg_id } = msgs.first().unwrap() {
             msg_id
@@ -2257,7 +2296,13 @@ mod tests {
             false,
         )
         .await.unwrap();
-        assert_eq!(chat::get_chat_msgs(&t, group_id, 0, None).await.len(), 1);
+        assert_eq!(
+            chat::get_chat_msgs(&t, group_id, 0, None)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
         let msg = message::Message::load_from_db(&t, *msg_id).await.unwrap();
         assert_eq!(msg.state, MessageState::OutMdnRcvd);
 
@@ -2335,7 +2380,7 @@ mod tests {
                 .get_authname(),
             "Имя, Фамилия",
         );
-        let msgs = chat::get_chat_msgs(&t, chat_id, 0, None).await;
+        let msgs = chat::get_chat_msgs(&t, chat_id, 0, None).await.unwrap();
         assert_eq!(msgs.len(), 1);
         let msg_id = if let ChatItem::Message { msg_id } = msgs.first().unwrap() {
             msg_id
@@ -2596,7 +2641,7 @@ mod tests {
 
         assert_eq!(msg.state, MessageState::OutFailed);
 
-        let msgs = chat::get_chat_msgs(&t, msg.chat_id, 0, None).await;
+        let msgs = chat::get_chat_msgs(&t, msg.chat_id, 0, None).await.unwrap();
         let msg_id = if let ChatItem::Message { msg_id } = msgs.last().unwrap() {
             msg_id
         } else {

@@ -70,7 +70,11 @@ async fn inbox_loop(ctx: Context, started: Sender<()>, inbox_handlers: ImapConne
                 Some(job) => {
                     // Let the fetch run, but return back to the job afterwards.
                     jobs_loaded = 0;
-                    if ctx.get_config_bool(Config::InboxWatch).await {
+                    if ctx
+                        .get_config_bool(Config::InboxWatch)
+                        .await
+                        .unwrap_or_default()
+                    {
                         info!(ctx, "postponing imap-job {} to run fetch...", job);
                         fetch(&ctx, &mut connection).await;
                     }
@@ -86,7 +90,11 @@ async fn inbox_loop(ctx: Context, started: Sender<()>, inbox_handlers: ImapConne
 
                     maybe_add_time_based_warnings(&ctx).await;
 
-                    info = if ctx.get_config_bool(Config::InboxWatch).await {
+                    info = if ctx
+                        .get_config_bool(Config::InboxWatch)
+                        .await
+                        .unwrap_or_default()
+                    {
                         fetch_idle(&ctx, &mut connection, Config::ConfiguredInboxFolder).await
                     } else {
                         connection.fake_idle(&ctx, None).await
@@ -108,7 +116,7 @@ async fn inbox_loop(ctx: Context, started: Sender<()>, inbox_handlers: ImapConne
 
 async fn fetch(ctx: &Context, connection: &mut Imap) {
     match ctx.get_config(Config::ConfiguredInboxFolder).await {
-        Some(watch_folder) => {
+        Ok(Some(watch_folder)) => {
             if let Err(err) = connection.connect_configured(&ctx).await {
                 error_network!(ctx, "{}", err);
                 return;
@@ -120,8 +128,15 @@ async fn fetch(ctx: &Context, connection: &mut Imap) {
                 warn!(ctx, "{}", err);
             }
         }
-        None => {
+        Ok(None) => {
             warn!(ctx, "Can not fetch inbox folder, not set");
+            connection.fake_idle(&ctx, None).await;
+        }
+        Err(err) => {
+            warn!(
+                ctx,
+                "Can not fetch inbox folder, failed to get config: {:?}", err
+            );
             connection.fake_idle(&ctx, None).await;
         }
     }
@@ -129,7 +144,7 @@ async fn fetch(ctx: &Context, connection: &mut Imap) {
 
 async fn fetch_idle(ctx: &Context, connection: &mut Imap, folder: Config) -> InterruptInfo {
     match ctx.get_config(folder).await {
-        Some(watch_folder) => {
+        Ok(Some(watch_folder)) => {
             // connect and fake idle if unable to connect
             if let Err(err) = connection.connect_configured(&ctx).await {
                 warn!(ctx, "imap connection failed: {}", err);
@@ -157,8 +172,15 @@ async fn fetch_idle(ctx: &Context, connection: &mut Imap, folder: Config) -> Int
                 connection.fake_idle(&ctx, Some(watch_folder)).await
             }
         }
-        None => {
+        Ok(None) => {
             warn!(ctx, "Can not watch {} folder, not set", folder);
+            connection.fake_idle(&ctx, None).await
+        }
+        Err(err) => {
+            warn!(
+                ctx,
+                "Can not watch {} folder, failed to retrieve config: {:?}", folder, err
+            );
             connection.fake_idle(&ctx, None).await
         }
     }
@@ -264,7 +286,11 @@ impl Scheduler {
             inbox_loop(ctx1, inbox_start_send, inbox_handlers).await
         }));
 
-        if ctx.get_config_bool(Config::MvboxWatch).await {
+        if ctx
+            .get_config_bool(Config::MvboxWatch)
+            .await
+            .unwrap_or_default()
+        {
             let ctx1 = ctx.clone();
             mvbox_handle = Some(task::spawn(async move {
                 simple_imap_loop(
@@ -279,7 +305,11 @@ impl Scheduler {
             mvbox_start_send.send(()).await;
         }
 
-        if ctx.get_config_bool(Config::SentboxWatch).await {
+        if ctx
+            .get_config_bool(Config::SentboxWatch)
+            .await
+            .unwrap_or_default()
+        {
             let ctx1 = ctx.clone();
             sentbox_handle = Some(task::spawn(async move {
                 simple_imap_loop(

@@ -52,85 +52,79 @@ pub struct LoginParam {
 
 impl LoginParam {
     /// Read the login parameters from the database.
-    pub async fn from_database(context: &Context, prefix: impl AsRef<str>) -> Self {
+    pub async fn from_database(
+        context: &Context,
+        prefix: impl AsRef<str>,
+    ) -> crate::sql::Result<Self> {
         let prefix = prefix.as_ref();
         let sql = &context.sql;
 
         let key = format!("{}addr", prefix);
         let addr = sql
-            .get_raw_config(context, key)
-            .await
+            .get_raw_config(key)
+            .await?
             .unwrap_or_default()
             .trim()
             .to_string();
 
         let key = format!("{}mail_server", prefix);
-        let mail_server = sql.get_raw_config(context, key).await.unwrap_or_default();
+        let mail_server = sql.get_raw_config(key).await?.unwrap_or_default();
 
         let key = format!("{}mail_port", prefix);
-        let mail_port = sql
-            .get_raw_config_int(context, key)
-            .await
-            .unwrap_or_default();
+        let mail_port = sql.get_raw_config_int(key).await?.unwrap_or_default();
 
         let key = format!("{}mail_user", prefix);
-        let mail_user = sql.get_raw_config(context, key).await.unwrap_or_default();
+        let mail_user = sql.get_raw_config(key).await?.unwrap_or_default();
 
         let key = format!("{}mail_pw", prefix);
-        let mail_pw = sql.get_raw_config(context, key).await.unwrap_or_default();
+        let mail_pw = sql.get_raw_config(key).await?.unwrap_or_default();
 
         let key = format!("{}mail_security", prefix);
         let mail_security = sql
-            .get_raw_config_int(context, key)
-            .await
+            .get_raw_config_int(key)
+            .await?
             .and_then(num_traits::FromPrimitive::from_i32)
             .unwrap_or_default();
 
         let key = format!("{}imap_certificate_checks", prefix);
         let imap_certificate_checks =
-            if let Some(certificate_checks) = sql.get_raw_config_int(context, key).await {
+            if let Some(certificate_checks) = sql.get_raw_config_int(key).await? {
                 num_traits::FromPrimitive::from_i32(certificate_checks).unwrap()
             } else {
                 Default::default()
             };
 
         let key = format!("{}send_server", prefix);
-        let send_server = sql.get_raw_config(context, key).await.unwrap_or_default();
+        let send_server = sql.get_raw_config(key).await?.unwrap_or_default();
 
         let key = format!("{}send_port", prefix);
-        let send_port = sql
-            .get_raw_config_int(context, key)
-            .await
-            .unwrap_or_default();
+        let send_port = sql.get_raw_config_int(key).await?.unwrap_or_default();
 
         let key = format!("{}send_user", prefix);
-        let send_user = sql.get_raw_config(context, key).await.unwrap_or_default();
+        let send_user = sql.get_raw_config(key).await?.unwrap_or_default();
 
         let key = format!("{}send_pw", prefix);
-        let send_pw = sql.get_raw_config(context, key).await.unwrap_or_default();
+        let send_pw = sql.get_raw_config(key).await?.unwrap_or_default();
 
         let key = format!("{}send_security", prefix);
         let send_security = sql
-            .get_raw_config_int(context, key)
-            .await
+            .get_raw_config_int(key)
+            .await?
             .and_then(num_traits::FromPrimitive::from_i32)
             .unwrap_or_default();
 
         let key = format!("{}smtp_certificate_checks", prefix);
         let smtp_certificate_checks =
-            if let Some(certificate_checks) = sql.get_raw_config_int(context, key).await {
+            if let Some(certificate_checks) = sql.get_raw_config_int(key).await? {
                 num_traits::FromPrimitive::from_i32(certificate_checks).unwrap()
             } else {
                 Default::default()
             };
 
         let key = format!("{}server_flags", prefix);
-        let server_flags = sql
-            .get_raw_config_int(context, key)
-            .await
-            .unwrap_or_default();
+        let server_flags = sql.get_raw_config_int(key).await?.unwrap_or_default();
 
-        LoginParam {
+        Ok(LoginParam {
             addr,
             imap: ServerLoginParam {
                 server: mail_server,
@@ -149,7 +143,7 @@ impl LoginParam {
                 certificate_checks: smtp_certificate_checks,
             },
             server_flags,
-        }
+        })
     }
 
     /// Save this loginparam to the database.
@@ -162,59 +156,50 @@ impl LoginParam {
         let sql = &context.sql;
 
         let key = format!("{}addr", prefix);
-        sql.set_raw_config(context, key, Some(&self.addr)).await?;
+        sql.set_raw_config(key, Some(&self.addr)).await?;
 
         let key = format!("{}mail_server", prefix);
-        sql.set_raw_config(context, key, Some(&self.imap.server))
-            .await?;
+        sql.set_raw_config(key, Some(&self.imap.server)).await?;
 
         let key = format!("{}mail_port", prefix);
-        sql.set_raw_config_int(context, key, self.imap.port as i32)
-            .await?;
+        sql.set_raw_config_int(key, self.imap.port as i32).await?;
 
         let key = format!("{}mail_user", prefix);
-        sql.set_raw_config(context, key, Some(&self.imap.user))
-            .await?;
+        sql.set_raw_config(key, Some(&self.imap.user)).await?;
 
         let key = format!("{}mail_pw", prefix);
-        sql.set_raw_config(context, key, Some(&self.imap.password))
-            .await?;
+        sql.set_raw_config(key, Some(&self.imap.password)).await?;
 
         let key = format!("{}mail_security", prefix);
-        sql.set_raw_config_int(context, key, self.imap.security as i32)
+        sql.set_raw_config_int(key, self.imap.security as i32)
             .await?;
 
         let key = format!("{}imap_certificate_checks", prefix);
-        sql.set_raw_config_int(context, key, self.imap.certificate_checks as i32)
+        sql.set_raw_config_int(key, self.imap.certificate_checks as i32)
             .await?;
 
         let key = format!("{}send_server", prefix);
-        sql.set_raw_config(context, key, Some(&self.smtp.server))
-            .await?;
+        sql.set_raw_config(key, Some(&self.smtp.server)).await?;
 
         let key = format!("{}send_port", prefix);
-        sql.set_raw_config_int(context, key, self.smtp.port as i32)
-            .await?;
+        sql.set_raw_config_int(key, self.smtp.port as i32).await?;
 
         let key = format!("{}send_user", prefix);
-        sql.set_raw_config(context, key, Some(&self.smtp.user))
-            .await?;
+        sql.set_raw_config(key, Some(&self.smtp.user)).await?;
 
         let key = format!("{}send_pw", prefix);
-        sql.set_raw_config(context, key, Some(&self.smtp.password))
-            .await?;
+        sql.set_raw_config(key, Some(&self.smtp.password)).await?;
 
         let key = format!("{}send_security", prefix);
-        sql.set_raw_config_int(context, key, self.smtp.security as i32)
+        sql.set_raw_config_int(key, self.smtp.security as i32)
             .await?;
 
         let key = format!("{}smtp_certificate_checks", prefix);
-        sql.set_raw_config_int(context, key, self.smtp.certificate_checks as i32)
+        sql.set_raw_config_int(key, self.smtp.certificate_checks as i32)
             .await?;
 
         let key = format!("{}server_flags", prefix);
-        sql.set_raw_config_int(context, key, self.server_flags)
-            .await?;
+        sql.set_raw_config_int(key, self.server_flags).await?;
 
         Ok(())
     }

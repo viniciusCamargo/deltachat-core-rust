@@ -261,61 +261,61 @@ impl Context {
      * UI chat/message related API
      ******************************************************************************/
 
-    pub async fn get_info(&self) -> BTreeMap<&'static str, String> {
+    pub async fn get_info(&self) -> Result<BTreeMap<&'static str, String>> {
         let unset = "0";
-        let l = LoginParam::from_database(self, "").await;
-        let l2 = LoginParam::from_database(self, "configured_").await;
-        let displayname = self.get_config(Config::Displayname).await;
-        let chats = get_chat_cnt(self).await as usize;
+        let l = LoginParam::from_database(self, "").await?;
+        let l2 = LoginParam::from_database(self, "configured_").await?;
+        let displayname = self.get_config(Config::Displayname).await?;
+        let chats = get_chat_cnt(self).await? as usize;
         let real_msgs = message::get_real_msg_cnt(self).await as usize;
         let deaddrop_msgs = message::get_deaddrop_msg_cnt(self).await as usize;
-        let contacts = Contact::get_real_cnt(self).await as usize;
-        let is_configured = self.get_config_int(Config::Configured).await;
+        let contacts = Contact::get_real_cnt(self).await? as usize;
+        let is_configured = self.get_config_int(Config::Configured).await?;
         let dbversion = self
             .sql
-            .get_raw_config_int(self, "dbversion")
-            .await
+            .get_raw_config_int("dbversion")
+            .await?
             .unwrap_or_default();
         let journal_mode = self
             .sql
-            .query_get_value(self, "PRAGMA journal_mode;", paramsv![])
-            .await
+            .query_get_value("PRAGMA journal_mode;", paramsv![])
+            .await?
             .unwrap_or_else(|| "unknown".to_string());
-        let e2ee_enabled = self.get_config_int(Config::E2eeEnabled).await;
-        let mdns_enabled = self.get_config_int(Config::MdnsEnabled).await;
-        let bcc_self = self.get_config_int(Config::BccSelf).await;
+        let e2ee_enabled = self.get_config_int(Config::E2eeEnabled).await?;
+        let mdns_enabled = self.get_config_int(Config::MdnsEnabled).await?;
+        let bcc_self = self.get_config_int(Config::BccSelf).await?;
 
         let prv_key_cnt: Option<isize> = self
             .sql
-            .query_get_value(self, "SELECT COUNT(*) FROM keypairs;", paramsv![])
-            .await;
+            .query_get_value("SELECT COUNT(*) FROM keypairs;", paramsv![])
+            .await?;
 
         let pub_key_cnt: Option<isize> = self
             .sql
-            .query_get_value(self, "SELECT COUNT(*) FROM acpeerstates;", paramsv![])
-            .await;
+            .query_get_value("SELECT COUNT(*) FROM acpeerstates;", paramsv![])
+            .await?;
         let fingerprint_str = match SignedPublicKey::load_self(self).await {
             Ok(key) => key.fingerprint().hex(),
             Err(err) => format!("<key failure: {}>", err),
         };
 
-        let inbox_watch = self.get_config_int(Config::InboxWatch).await;
-        let sentbox_watch = self.get_config_int(Config::SentboxWatch).await;
-        let mvbox_watch = self.get_config_int(Config::MvboxWatch).await;
-        let mvbox_move = self.get_config_int(Config::MvboxMove).await;
+        let inbox_watch = self.get_config_int(Config::InboxWatch).await?;
+        let sentbox_watch = self.get_config_int(Config::SentboxWatch).await?;
+        let mvbox_watch = self.get_config_int(Config::MvboxWatch).await?;
+        let mvbox_move = self.get_config_int(Config::MvboxMove).await?;
         let folders_configured = self
             .sql
-            .get_raw_config_int(self, "folders_configured")
-            .await
+            .get_raw_config_int("folders_configured")
+            .await?
             .unwrap_or_default();
 
         let configured_sentbox_folder = self
             .get_config(Config::ConfiguredSentboxFolder)
-            .await
+            .await?
             .unwrap_or_else(|| "<unset>".to_string());
         let configured_mvbox_folder = self
             .get_config(Config::ConfiguredMvboxFolder)
-            .await
+            .await?
             .unwrap_or_else(|| "<unset>".to_string());
 
         let mut res = get_info();
@@ -331,7 +331,7 @@ impl Context {
         res.insert(
             "selfavatar",
             self.get_config(Config::Selfavatar)
-                .await
+                .await?
                 .unwrap_or_else(|| "<unset>".to_string()),
         );
         res.insert("is_configured", is_configured.to_string());
@@ -360,7 +360,7 @@ impl Context {
         let elapsed = self.creation_time.elapsed();
         res.insert("uptime", duration_to_str(elapsed.unwrap_or_default()));
 
-        res
+        Ok(res)
     }
 
     pub async fn get_fresh_msgs(&self) -> Vec<MsgId> {
@@ -450,19 +450,21 @@ impl Context {
             .unwrap_or_default()
     }
 
-    pub async fn is_inbox(&self, folder_name: impl AsRef<str>) -> bool {
-        self.get_config(Config::ConfiguredInboxFolder).await
-            == Some(folder_name.as_ref().to_string())
+    pub async fn is_inbox(&self, folder_name: impl AsRef<str>) -> Result<bool> {
+        let inbox = self.get_config(Config::ConfiguredInboxFolder).await?;
+        Ok(inbox == Some(folder_name.as_ref().to_string()))
     }
 
-    pub async fn is_sentbox(&self, folder_name: impl AsRef<str>) -> bool {
-        self.get_config(Config::ConfiguredSentboxFolder).await
-            == Some(folder_name.as_ref().to_string())
+    pub async fn is_sentbox(&self, folder_name: impl AsRef<str>) -> Result<bool> {
+        let sentbox = self.get_config(Config::ConfiguredSentboxFolder).await?;
+
+        Ok(sentbox == Some(folder_name.as_ref().to_string()))
     }
 
-    pub async fn is_mvbox(&self, folder_name: impl AsRef<str>) -> bool {
-        self.get_config(Config::ConfiguredMvboxFolder).await
-            == Some(folder_name.as_ref().to_string())
+    pub async fn is_mvbox(&self, folder_name: impl AsRef<str>) -> Result<bool> {
+        let mvbox = self.get_config(Config::ConfiguredMvboxFolder).await?;
+
+        Ok(mvbox == Some(folder_name.as_ref().to_string()))
     }
 
     pub fn derive_blobdir(dbfile: &PathBuf) -> PathBuf {
@@ -594,7 +596,7 @@ mod tests {
     async fn test_get_info() {
         let t = TestContext::new().await;
 
-        let info = t.get_info().await;
+        let info = t.get_info().await.unwrap();
         assert!(info.get("database_dir").is_some());
     }
 

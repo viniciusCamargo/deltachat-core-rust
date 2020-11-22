@@ -214,7 +214,7 @@ impl Imap {
                     let addr: &str = config.addr.as_ref();
 
                     if let Some(token) =
-                        dc_get_oauth2_access_token(context, addr, imap_pw, true).await
+                        dc_get_oauth2_access_token(context, addr, imap_pw, true).await?
                     {
                         let auth = OAuth2 {
                             user: imap_user.into(),
@@ -254,7 +254,7 @@ impl Imap {
 
                 let lock = context.wrong_pw_warning_mutex.lock().await;
                 if self.login_failed_once
-                    && context.get_config_bool(Config::NotifyAboutWrongPw).await
+                    && context.get_config_bool(Config::NotifyAboutWrongPw).await?
                 {
                     if let Err(e) = context.set_config(Config::NotifyAboutWrongPw, None).await {
                         warn!(context, "{}", e);
@@ -326,11 +326,11 @@ impl Imap {
         if self.is_connected() && !self.should_reconnect() {
             return Ok(());
         }
-        if !context.is_configured().await {
+        if !context.is_configured().await? {
             bail!("IMAP Connect without configured params");
         }
 
-        let param = LoginParam::from_database(context, "configured_").await;
+        let param = LoginParam::from_database(context, "configured_").await?;
         // the trailing underscore is correct
 
         if let Err(err) = self
@@ -541,7 +541,7 @@ impl Imap {
         self.select_folder(context, Some(folder)).await?;
 
         // compare last seen UIDVALIDITY against the current one
-        let (uid_validity, last_seen_uid) = get_config_last_seen_uid(context, &folder).await;
+        let (uid_validity, last_seen_uid) = get_config_last_seen_uid(context, &folder).await?;
 
         let config = &mut self.config;
         let mailbox = config
@@ -567,7 +567,7 @@ impl Imap {
             // id we do not do this here, we'll miss the first message
             // as we will get in here again and fetch from lastseenuid+1 then
 
-            set_config_last_seen_uid(context, &folder, new_uid_validity, 0).await;
+            set_config_last_seen_uid(context, &folder, new_uid_validity, 0).await?;
             return Ok((new_uid_validity, 0));
         }
 
@@ -611,7 +611,7 @@ impl Imap {
             }
         };
 
-        set_config_last_seen_uid(context, &folder, new_uid_validity, new_last_seen_uid).await;
+        set_config_last_seen_uid(context, &folder, new_uid_validity, new_last_seen_uid).await?;
         if uid_validity != 0 || last_seen_uid != 0 {
             job::schedule_resync(context).await;
         }
@@ -632,7 +632,7 @@ impl Imap {
         folder: S,
         fetch_existing_msgs: bool,
     ) -> Result<bool> {
-        let show_emails = ShowEmails::from_i32(context.get_config_int(Config::ShowEmails).await)
+        let show_emails = ShowEmails::from_i32(context.get_config_int(Config::ShowEmails).await?)
             .unwrap_or_default();
 
         let (uid_validity, last_seen_uid) = self
@@ -694,7 +694,7 @@ impl Imap {
         let last_one = new_last_seen_uid.max(new_last_seen_uid_processed);
 
         if last_one > last_seen_uid {
-            set_config_last_seen_uid(context, &folder, uid_validity, last_one).await;
+            set_config_last_seen_uid(context, &folder, uid_validity, last_one).await?;
         }
 
         if read_errors == 0 {
@@ -718,7 +718,7 @@ impl Imap {
         let session = self.session.as_mut().unwrap();
         let self_addr = context
             .get_config(Config::ConfiguredAddr)
-            .await
+            .await?
             .ok_or_else(|| format_err!("Not configured"))?;
 
         let search_command = format!("FROM \"{}\"", self_addr);
@@ -1257,10 +1257,7 @@ impl Imap {
         context: &Context,
         create_mvbox: bool,
     ) -> Result<()> {
-        let folders_configured = context
-            .sql
-            .get_raw_config_int(context, "folders_configured")
-            .await;
+        let folders_configured = context.sql.get_raw_config_int("folders_configured").await?;
         if folders_configured.unwrap_or_default() >= DC_FOLDERS_CONFIGURED_VERSION {
             return Ok(());
         }
@@ -1378,7 +1375,7 @@ impl Imap {
             }
             context
                 .sql
-                .set_raw_config_int(context, "folders_configured", DC_FOLDERS_CONFIGURED_VERSION)
+                .set_raw_config_int("folders_configured", DC_FOLDERS_CONFIGURED_VERSION)
                 .await?;
         }
         info!(context, "FINISHED configuring IMAP-folders.");
@@ -1465,7 +1462,7 @@ async fn precheck_imf(
                 "[move] detected bcc-self {} as {}/{}", rfc724_mid, server_folder, server_uid
             );
 
-            let delete_server_after = context.get_config_delete_server_after().await;
+            let delete_server_after = context.get_config_delete_server_after().await?;
 
             if delete_server_after != Some(0) {
                 if msg_id
@@ -1662,28 +1659,28 @@ pub async fn set_config_last_seen_uid<S: AsRef<str>>(
     folder: S,
     uidvalidity: u32,
     lastseenuid: u32,
-) {
+) -> Result<()> {
     let key = format!("imap.mailbox.{}", folder.as_ref());
     let val = format!("{}:{}", uidvalidity, lastseenuid);
 
-    context
-        .sql
-        .set_raw_config(context, &key, Some(&val))
-        .await
-        .ok();
+    context.sql.set_raw_config(&key, Some(&val)).await?;
+    Ok(())
 }
 
-async fn get_config_last_seen_uid<S: AsRef<str>>(context: &Context, folder: S) -> (u32, u32) {
+async fn get_config_last_seen_uid<S: AsRef<str>>(
+    context: &Context,
+    folder: S,
+) -> Result<(u32, u32)> {
     let key = format!("imap.mailbox.{}", folder.as_ref());
-    if let Some(entry) = context.sql.get_raw_config(context, &key).await {
+    if let Some(entry) = context.sql.get_raw_config(&key).await? {
         // the entry has the format `imap.mailbox.<folder>=<uidvalidity>:<lastseenuid>`
         let mut parts = entry.split(':');
-        (
+        Ok((
             parts.next().unwrap_or_default().parse().unwrap_or(0),
             parts.next().unwrap_or_default().parse().unwrap_or(0),
-        )
+        ))
     } else {
-        (0, 0)
+        Ok((0, 0))
     }
 }
 
