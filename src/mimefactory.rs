@@ -50,7 +50,7 @@ pub struct MimeFactory<'a, 'b> {
     references: String,
     req_mdn: bool,
     context: &'a Context,
-    last_added_location_id: u32,
+    last_added_location_id: i64,
     attach_selfavatar: bool,
 }
 
@@ -61,7 +61,7 @@ pub struct RenderedEmail {
     // pub envelope: Envelope,
     pub is_encrypted: bool,
     pub is_gossiped: bool,
-    pub last_added_location_id: u32,
+    pub last_added_location_id: i64,
 
     /// Message ID (Message in the sense of Email)
     pub rfc724_mid: String,

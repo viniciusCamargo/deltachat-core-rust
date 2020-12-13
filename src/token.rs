@@ -33,8 +33,13 @@ pub async fn save(context: &Context, namespace: Namespace, foreign_id: ChatId) -
     context
         .sql
         .execute(
-            "INSERT INTO tokens (namespc, foreign_id, token, timestamp) VALUES (?, ?, ?, ?);",
-            paramsv![namespace, foreign_id, token, time()],
+            sqlx::query(
+                "INSERT INTO tokens (namespc, foreign_id, token, timestamp) VALUES (?, ?, ?, ?);",
+            )
+            .bind(namespace)
+            .bind(foreign_id)
+            .bind(token)
+            .bind(time()),
         )
         .await
         .ok();

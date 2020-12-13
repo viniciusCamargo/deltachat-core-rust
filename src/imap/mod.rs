@@ -1475,13 +1475,13 @@ async fn precheck_imf(
                     // added after the Move Job completed.
                     job::add(
                         context,
-                        job::Job::new(Action::MoveMsg, msg_id.to_u32(), Params::new(), 0),
+                        job::Job::new(Action::MoveMsg, msg_id.to_i64(), Params::new(), 0),
                     )
                     .await;
                 } else {
                     job::add(
                         context,
-                        job::Job::new(Action::MarkseenMsgOnImap, msg_id.to_u32(), Params::new(), 0),
+                        job::Job::new(Action::MarkseenMsgOnImap, msg_id.to_i64(), Params::new(), 0),
                     )
                     .await;
                 }
@@ -1524,7 +1524,7 @@ async fn precheck_imf(
                 if message_state == MessageState::InSeen || message_state.is_outgoing() {
                     job::add(
                         context,
-                        job::Job::new(Action::MarkseenMsgOnImap, msg_id.to_u32(), Params::new(), 0),
+                        job::Job::new(Action::MarkseenMsgOnImap, msg_id.to_i64(), Params::new(), 0),
                     )
                     .await;
                 }

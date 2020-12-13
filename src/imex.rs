@@ -628,11 +628,8 @@ async fn import_backup_old(context: &Context, backup_to_import: impl AsRef<Path>
 
     if all_files_extracted {
         // only delete backup_blobs if all files were successfully extracted
-        context
-            .sql
-            .execute("DROP TABLE backup_blobs;", paramsv![])
-            .await?;
-        context.sql.execute("VACUUM;", paramsv![]).await.ok();
+        context.sql.execute("DROP TABLE backup_blobs;").await?;
+        context.sql.execute("VACUUM;").await.ok();
         Ok(())
     } else {
         bail!("received stop signal");
@@ -657,7 +654,7 @@ async fn export_backup(context: &Context, dir: impl AsRef<Path>) -> Result<()> {
 
     context
         .sql
-        .execute("VACUUM;", paramsv![])
+        .execute("VACUUM;")
         .await
         .map_err(|e| warn!(context, "Vacuum failed, exporting anyway {}", e));
 

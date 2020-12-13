@@ -1,13 +1,14 @@
 //! # SQLite wrapper
 
 use async_std::prelude::*;
-use async_std::sync::RwLock;
+use async_std::sync::{Mutex, RwLock};
 
 use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
 
 use rusqlite::{Connection, Error as SqlError, OpenFlags};
+use sqlx::{pool::PoolOptions, sqlite::*, Done, Execute, Executor};
 
 use crate::chat::{update_device_icon, update_saved_messages_icon};
 use crate::constants::DC_CHAT_ID_TRASH;
@@ -37,12 +38,14 @@ macro_rules! paramsv {
 #[derive(Debug)]
 pub struct Sql {
     pool: RwLock<Option<r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>>,
+    sql: Mutex<Option<SqlitePool>>,
 }
 
 impl Default for Sql {
     fn default() -> Self {
         Self {
             pool: RwLock::new(None),
+            sql: Mutex::new(None),
         }
     }
 }
@@ -58,6 +61,10 @@ impl Sql {
 
     pub async fn close(&self) {
         let _ = self.pool.write().await.take();
+        if let Some(sql) = self.sql.lock().await.take() {
+            sql.close().await;
+        }
+
         // drop closes the connection
     }
 
@@ -83,10 +90,26 @@ impl Sql {
                 dbfile.as_ref().to_string_lossy(),
                 e
             )
-        })
+        })?;
+
+        open2(context, self, &dbfile, readonly).await?;
+
+        Ok(())
     }
 
-    pub async fn execute<S: AsRef<str>>(
+    pub async fn execute<'e, 'q, E>(&self, query: E) -> Result<u64>
+    where
+        'q: 'e,
+        E: 'q + Execute<'q, Sqlite>,
+    {
+        let lock = self.sql.lock().await;
+        let pool = lock.as_ref().ok_or(Error::SqlNoConnection)?;
+
+        let rows = pool.execute(query).await?;
+        Ok(rows.rows_affected())
+    }
+
+    pub async fn execute_old<S: AsRef<str>>(
         &self,
         sql: S,
         params: Vec<&dyn crate::ToSql>,
@@ -256,19 +279,21 @@ impl Sql {
                 .await?;
             if exists {
                 self.execute(
-                    "UPDATE config SET value=? WHERE keyname=?;",
-                    paramsv![(*value).to_string(), key.to_string()],
+                    sqlx::query("UPDATE config SET value=? WHERE keyname=?;")
+                        .bind(value)
+                        .bind(key),
                 )
                 .await?;
             } else {
                 self.execute(
-                    "INSERT INTO config (keyname, value) VALUES (?, ?);",
-                    paramsv![key.to_string(), (*value).to_string()],
+                    sqlx::query("INSERT INTO config (keyname, value) VALUES (?, ?);")
+                        .bind(key)
+                        .bind(value),
                 )
                 .await?;
             }
         } else {
-            self.execute("DELETE FROM config WHERE keyname=?;", paramsv![key])
+            self.execute(sqlx::query("DELETE FROM config WHERE keyname=?;").bind(key))
                 .await?;
         }
 
@@ -330,7 +355,7 @@ impl Sql {
         table: impl AsRef<str>,
         field: impl AsRef<str>,
         value: impl AsRef<str>,
-    ) -> Result<u32> {
+    ) -> Result<i64> {
         let res = {
             let mut conn = self.get_conn().await?;
             get_rowid(&mut conn, table, field, value)
@@ -345,8 +370,8 @@ impl Sql {
         field: impl AsRef<str>,
         value: i64,
         field2: impl AsRef<str>,
-        value2: i32,
-    ) -> Result<u32> {
+        value2: i64,
+    ) -> Result<i64> {
         let res = {
             let mut conn = self.get_conn().await?;
             get_rowid2(&mut conn, table, field, value, field2, value2)
@@ -361,7 +386,7 @@ pub fn get_rowid(
     table: impl AsRef<str>,
     field: impl AsRef<str>,
     value: impl AsRef<str>,
-) -> std::result::Result<u32, SqlError> {
+) -> std::result::Result<i64, SqlError> {
     // alternative to sqlite3_last_insert_rowid() which MUST NOT be used due to race conditions, see comment above.
     // the ORDER BY ensures, this function always returns the most recent id,
     // eg. if a Message-ID is split into different messages.
@@ -371,7 +396,7 @@ pub fn get_rowid(
         field.as_ref(),
     );
 
-    conn.query_row(&query, params![value.as_ref()], |row| row.get::<_, u32>(0))
+    conn.query_row(&query, params![value.as_ref()], |row| row.get::<_, i64>(0))
 }
 
 pub fn get_rowid2(
@@ -380,8 +405,8 @@ pub fn get_rowid2(
     field: impl AsRef<str>,
     value: i64,
     field2: impl AsRef<str>,
-    value2: i32,
-) -> std::result::Result<u32, SqlError> {
+    value2: i64,
+) -> std::result::Result<i64, SqlError> {
     conn.query_row(
         &format!(
             "SELECT id FROM {} WHERE {}={} AND {}={} ORDER BY id DESC",
@@ -392,7 +417,7 @@ pub fn get_rowid2(
             value2,
         ),
         params![],
-        |row| row.get::<_, u32>(0),
+        |row| row.get::<_, i64>(0),
     )
 }
 
@@ -607,7 +632,7 @@ async fn open(
         .with_init(|c| {
             c.execute_batch(&format!(
                 "PRAGMA secure_delete=on;
-                 PRAGMA busy_timeout = {};
+                 PRGAMA busy_timeout = {};
                  PRAGMA temp_store=memory; -- Avoid SQLITE_IOERR_GETTEMPPATH errors on Android
                  ",
                 Duration::from_secs(10).as_millis()
@@ -631,9 +656,100 @@ async fn open(
         // but even if execute() would handle errors more gracefully, we should continue on errors -
         // systems might not be able to handle WAL, in which case the standard-journal is used.
         // that may be not optimal, but better than not working at all :)
-        sql.execute("PRAGMA journal_mode=WAL;", paramsv![])
+        sql.execute_old("PRAGMA journal_mode=WAL;", paramsv![])
             .await
             .ok();
+
+        // (1) update low-level database structure.
+        // this should be done before updates that use high-level objects that
+        // rely themselves on the low-level structure.
+        // --------------------------------------------------------------------
+
+        let (recalc_fingerprints, update_icons) = migrations::run(context, sql).await?;
+
+        // (2) updates that require high-level objects
+        // (the structure is complete now and all objects are usable)
+        // --------------------------------------------------------------------
+
+        if recalc_fingerprints {
+            info!(context, "[migration] recalc fingerprints");
+            let addrs = sql
+                .query_map(
+                    "select addr from acpeerstates;",
+                    paramsv![],
+                    |row| row.get::<_, String>(0),
+                    |addrs| {
+                        addrs
+                            .collect::<std::result::Result<Vec<_>, _>>()
+                            .map_err(Into::into)
+                    },
+                )
+                .await?;
+            for addr in &addrs {
+                if let Some(ref mut peerstate) = Peerstate::from_addr(context, addr).await? {
+                    peerstate.recalc_fingerprint();
+                    peerstate.save_to_db(sql, false).await?;
+                }
+            }
+        }
+        if update_icons {
+            update_saved_messages_icon(context).await?;
+            update_device_icon(context).await?;
+        }
+    }
+
+    info!(context, "Opened {:?}.", dbfile.as_ref(),);
+
+    Ok(())
+}
+
+async fn open2(
+    context: &Context,
+    sql: &Sql,
+    dbfile: impl AsRef<Path>,
+    readonly: bool,
+) -> crate::error::Result<()> {
+    if sql.is_open().await {
+        error!(
+            context,
+            "Cannot open, database \"{:?}\" already opened.",
+            dbfile.as_ref(),
+        );
+        return Err(Error::SqlAlreadyOpen.into());
+    }
+
+    let config = SqliteConnectOptions::new()
+        .filename(dbfile.as_ref())
+        .read_only(readonly)
+        .create_if_missing(!readonly);
+    let pool = PoolOptions::<Sqlite>::new()
+        .after_connect(|conn| {
+            Box::pin(async move {
+                conn.execute_many(
+                    r#"
+PRAGMA secure_delete=on;
+PRAGMA busy_timeout = {};
+PRAGMA temp_store=memory; -- Avoid SQLITE_IOERR_GETTEMPPATH errors on Android
+"#,
+                )
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .await?;
+                Ok(())
+            })
+        })
+        .connect_with(config)
+        .await?;
+    {
+        *sql.sql.lock().await = Some(pool);
+    }
+
+    if !readonly {
+        // journal_mode is persisted, it is sufficient to change it only for one handle.
+        // (nb: execute() always returns errors for this PRAGMA call, just discard it.
+        // but even if execute() would handle errors more gracefully, we should continue on errors -
+        // systems might not be able to handle WAL, in which case the standard-journal is used.
+        // that may be not optimal, but better than not working at all :)
+        sql.execute("PRAGMA journal_mode=WAL;").await.ok();
 
         // (1) update low-level database structure.
         // this should be done before updates that use high-level objects that
@@ -682,10 +798,12 @@ async fn open(
 /// have a server UID.
 async fn prune_tombstones(sql: &Sql) -> Result<()> {
     sql.execute(
-        "DELETE FROM msgs \
+        sqlx::query(
+            "DELETE FROM msgs \
          WHERE (chat_id = ? OR hidden) \
          AND server_uid = 0",
-        paramsv![DC_CHAT_ID_TRASH],
+        )
+        .bind(DC_CHAT_ID_TRASH),
     )
     .await?;
     Ok(())

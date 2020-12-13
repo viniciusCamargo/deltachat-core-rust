@@ -39,7 +39,19 @@ use crate::{scheduler::InterruptInfo, sql};
 const JOB_RETRIES: u32 = 17;
 
 /// Thread IDs
-#[derive(Debug, Display, Copy, Clone, PartialEq, Eq, FromPrimitive, ToPrimitive, FromSql, ToSql)]
+#[derive(
+    Debug,
+    Display,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    FromPrimitive,
+    ToPrimitive,
+    FromSql,
+    ToSql,
+    sqlx::Type,
+)]
 #[repr(i32)]
 pub(crate) enum Thread {
     Unknown = 0,
@@ -88,6 +100,7 @@ impl Default for Thread {
     ToPrimitive,
     FromSql,
     ToSql,
+    sqlx::Type,
 )]
 #[repr(i32)]
 pub enum Action {
@@ -146,7 +159,7 @@ impl From<Action> for Thread {
 pub struct Job {
     pub job_id: u32,
     pub action: Action,
-    pub foreign_id: u32,
+    pub foreign_id: i64,
     pub desired_timestamp: i64,
     pub added_timestamp: i64,
     pub tries: u32,
@@ -161,7 +174,7 @@ impl fmt::Display for Job {
 }
 
 impl Job {
-    pub fn new(action: Action, foreign_id: u32, param: Params, delay_seconds: i64) -> Self {
+    pub fn new(action: Action, foreign_id: i64, param: Params, delay_seconds: i64) -> Self {
         let timestamp = time();
 
         Self {
@@ -185,7 +198,7 @@ impl Job {
         if self.job_id != 0 {
             context
                 .sql
-                .execute("DELETE FROM jobs WHERE id=?;", paramsv![self.job_id as i32])
+                .execute(sqlx::query("DELETE FROM jobs WHERE id=?;").bind(self.job_id as i32))
                 .await?;
         }
 
@@ -204,26 +217,24 @@ impl Job {
             context
                 .sql
                 .execute(
-                    "UPDATE jobs SET desired_timestamp=?, tries=?, param=? WHERE id=?;",
-                    paramsv![
-                        self.desired_timestamp,
-                        self.tries as i64,
-                        self.param.to_string(),
-                        self.job_id as i32,
-                    ],
+                    sqlx::query(
+                        "UPDATE jobs SET desired_timestamp=?, tries=?, param=? WHERE id=?;",
+                    )
+                    .bind(self.desired_timestamp)
+                    .bind(self.tries as i64)
+                    .bind(self.param.to_string())
+                    .bind(self.job_id as i32),
                 )
                 .await?;
         } else {
             context.sql.execute(
-                "INSERT INTO jobs (added_timestamp, thread, action, foreign_id, param, desired_timestamp) VALUES (?,?,?,?,?,?);",
-                paramsv![
-                    self.added_timestamp,
-                    thread,
-                    self.action,
-                    self.foreign_id,
-                    self.param.to_string(),
-                    self.desired_timestamp
-                ]
+                sqlx::query("INSERT INTO jobs (added_timestamp, thread, action, foreign_id, param, desired_timestamp) VALUES (?,?,?,?,?,?);")
+                    .bind(self.added_timestamp)
+                    .bind(thread)
+                    .bind(self.action)
+                    .bind(self.foreign_id)
+                    .bind(self.param.to_string())
+                    .bind(self.desired_timestamp)
             ).await?;
         }
 
@@ -412,7 +423,7 @@ impl Job {
     async fn get_additional_mdn_jobs(
         &self,
         context: &Context,
-        contact_id: u32,
+        contact_id: i64,
     ) -> sql::Result<(Vec<u32>, Vec<String>)> {
         // Extract message IDs from job parameters
         let res: Vec<(u32, MsgId)> = context
@@ -805,23 +816,22 @@ impl Job {
 pub async fn kill_action(context: &Context, action: Action) -> bool {
     context
         .sql
-        .execute("DELETE FROM jobs WHERE action=?;", paramsv![action])
+        .execute(sqlx::query("DELETE FROM jobs WHERE action=?;").bind(action))
         .await
         .is_ok()
 }
 
 /// Remove jobs with specified IDs.
 async fn kill_ids(context: &Context, job_ids: &[u32]) -> sql::Result<()> {
-    context
-        .sql
-        .execute(
-            format!(
-                "DELETE FROM jobs WHERE id IN({})",
-                job_ids.iter().map(|_| "?").join(",")
-            ),
-            job_ids.iter().map(|i| i as &dyn crate::ToSql).collect(),
-        )
-        .await?;
+    let q = format!(
+        "DELETE FROM jobs WHERE id IN({})",
+        job_ids.iter().map(|_| "?").join(",")
+    );
+    let mut query = sqlx::query(&q);
+    for id in job_ids {
+        query = query.bind(*id as i64);
+    }
+    context.sql.execute(query).await?;
     Ok(())
 }
 
@@ -1000,7 +1010,7 @@ pub async fn send_msg_job(context: &Context, msg_id: MsgId) -> Result<Option<Job
     param.set(Param::File, blob.as_name());
     param.set(Param::Recipients, &recipients);
 
-    let job = create(Action::SendMsgToSmtp, msg_id.to_u32() as i32, param, 0)?;
+    let job = create(Action::SendMsgToSmtp, msg_id.to_i64(), param, 0)?;
 
     Ok(Some(job))
 }
@@ -1014,7 +1024,7 @@ async fn load_imap_deletion_job(context: &Context) -> sql::Result<Option<Job>> {
     let res = if let Some(msg_id) = load_imap_deletion_msgid(context).await? {
         Some(Job::new(
             Action::DeleteMsgOnImap,
-            msg_id.to_u32(),
+            msg_id.to_i64(),
             Params::new(),
             0,
         ))
@@ -1161,7 +1171,7 @@ fn get_backoff_time_offset(tries: u32) -> i64 {
 
 async fn send_mdn(context: &Context, msg: &Message) -> Result<()> {
     let mut param = Params::new();
-    param.set(Param::MsgId, msg.id.to_u32().to_string());
+    param.set(Param::MsgId, msg.id.to_i64().to_string());
 
     add(context, Job::new(Action::SendMdn, msg.from_id, param, 0)).await;
 
@@ -1178,13 +1188,13 @@ pub(crate) async fn schedule_resync(context: &Context) {
 }
 
 /// Creates a job.
-pub fn create(action: Action, foreign_id: i32, param: Params, delay_seconds: i64) -> Result<Job> {
+pub fn create(action: Action, foreign_id: i64, param: Params, delay_seconds: i64) -> Result<Job> {
     ensure!(
         action != Action::Unknown,
         "Invalid action passed to job_add"
     );
 
-    Ok(Job::new(action, foreign_id as u32, param, delay_seconds))
+    Ok(Job::new(action, foreign_id, param, delay_seconds))
 }
 
 /// Adds a job to the database, scheduling it.
@@ -1310,7 +1320,7 @@ LIMIT 1;
                     Ok(id) => {
                         context
                             .sql
-                            .execute("DELETE FROM jobs WHERE id=?;", paramsv![id])
+                            .execute(sqlx::query("DELETE FROM jobs WHERE id=?;").bind(id))
                             .await
                             .ok();
                     }
@@ -1357,17 +1367,17 @@ mod tests {
         context
             .sql
             .execute(
-                "INSERT INTO jobs
+                sqlx::query(
+                    "INSERT INTO jobs
                    (added_timestamp, thread, action, foreign_id, param, desired_timestamp)
                  VALUES (?, ?, ?, ?, ?, ?);",
-                paramsv![
-                    now,
-                    Thread::from(Action::MoveMsg),
-                    Action::MoveMsg,
-                    foreign_id,
-                    Params::new().to_string(),
-                    now
-                ],
+                )
+                .bind(now)
+                .bind(Thread::from(Action::MoveMsg))
+                .bind(Action::MoveMsg)
+                .bind(foreign_id)
+                .bind(Params::new().to_string())
+                .bind(now),
             )
             .await
             .unwrap();

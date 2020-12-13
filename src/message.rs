@@ -32,13 +32,25 @@ const SUMMARY_CHARACTERS: usize = 160;
 /// This type can represent both the special as well as normal
 /// messages.
 #[derive(
-    Debug, Copy, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+    Debug,
+    Copy,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    sqlx::Type,
 )]
-pub struct MsgId(u32);
+#[sqlx(transparent)]
+pub struct MsgId(i64);
 
 impl MsgId {
     /// Create a new [MsgId].
-    pub fn new(id: u32) -> MsgId {
+    pub fn new(id: i64) -> MsgId {
         MsgId(id)
     }
 
@@ -106,12 +118,13 @@ impl MsgId {
     /// It means the message is deleted locally, but not on the server
     /// yet.
     pub async fn trash(self, context: &Context) -> crate::sql::Result<()> {
-        let chat_id = ChatId::new(DC_CHAT_ID_TRASH);
+        let chat_id = DC_CHAT_ID_TRASH;
         context
             .sql
             .execute(
-                "UPDATE msgs SET chat_id=?, txt='', txt_raw='' WHERE id=?",
-                paramsv![chat_id, self],
+                sqlx::query("UPDATE msgs SET chat_id=?, txt='', txt_raw='' WHERE id=?")
+                    .bind(chat_id)
+                    .bind(self),
             )
             .await?;
 
@@ -124,11 +137,11 @@ impl MsgId {
         // sure they are not left while the message is deleted.
         context
             .sql
-            .execute("DELETE FROM msgs_mdns WHERE msg_id=?;", paramsv![self])
+            .execute(sqlx::query("DELETE FROM msgs_mdns WHERE msg_id=?;").bind(self))
             .await?;
         context
             .sql
-            .execute("DELETE FROM msgs WHERE id=?;", paramsv![self])
+            .execute(sqlx::query("DELETE FROM msgs WHERE id=?;").bind(self))
             .await?;
         Ok(())
     }
@@ -142,10 +155,12 @@ impl MsgId {
         context
             .sql
             .execute(
-                "UPDATE msgs \
+                sqlx::query(
+                    "UPDATE msgs \
              SET server_folder='', server_uid=0 \
              WHERE id=?",
-                paramsv![self],
+                )
+                .bind(self),
             )
             .await?;
         Ok(())
@@ -155,7 +170,7 @@ impl MsgId {
     ///
     /// Avoid using this, eventually types should be cleaned up enough
     /// that it is no longer necessary.
-    pub fn to_u32(self) -> u32 {
+    pub fn to_i64(self) -> i64 {
         self.0
     }
 }
@@ -193,7 +208,7 @@ impl rusqlite::types::FromSql for MsgId {
         // Would be nice if we could use match here, but alas.
         i64::column_result(value).and_then(|val| {
             if 0 <= val && val <= std::u32::MAX as i64 {
-                Ok(MsgId::new(val as u32))
+                Ok(MsgId::new(val))
             } else {
                 Err(rusqlite::types::FromSqlError::OutOfRange(val))
             }
@@ -247,8 +262,8 @@ impl Default for MessengerMessage {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Message {
     pub(crate) id: MsgId,
-    pub(crate) from_id: u32,
-    pub(crate) to_id: u32,
+    pub(crate) from_id: i64,
+    pub(crate) to_id: i64,
     pub(crate) chat_id: ChatId,
     pub(crate) viewtype: Viewtype,
     pub(crate) state: MessageState,
@@ -545,7 +560,7 @@ impl Message {
             return ret;
         };
 
-        let contact = if self.from_id != DC_CONTACT_ID_SELF as u32 && chat.typ == Chattype::Group {
+        let contact = if self.from_id != DC_CONTACT_ID_SELF && chat.typ == Chattype::Group {
             Contact::get_by_id(context, self.from_id).await.ok()
         } else {
             None
@@ -800,8 +815,9 @@ impl Message {
         context
             .sql
             .execute(
-                "UPDATE msgs SET param=? WHERE id=?;",
-                paramsv![self.param.to_string(), self.id],
+                sqlx::query("UPDATE msgs SET param=? WHERE id=?;")
+                    .bind(self.param.to_string())
+                    .bind(self.id),
             )
             .await
             .is_ok()
@@ -836,6 +852,7 @@ impl Message {
     FromSql,
     Serialize,
     Deserialize,
+    sqlx::Type,
 )]
 #[repr(i32)]
 pub enum MessageState {
@@ -1046,7 +1063,7 @@ pub async fn get_msg_info(context: &Context, msg_id: MsgId) -> Result<String, Er
     ret += &format!(" by {}", name);
     ret += "\n";
 
-    if msg.from_id != DC_CONTACT_ID_SELF as u32 {
+    if msg.from_id != DC_CONTACT_ID_SELF {
         let s = dc_timestamp_to_str(if 0 != msg.timestamp_rcvd {
             msg.timestamp_rcvd
         } else {
@@ -1078,7 +1095,7 @@ pub async fn get_msg_info(context: &Context, msg_id: MsgId) -> Result<String, Er
             "SELECT contact_id, timestamp_sent FROM msgs_mdns WHERE msg_id=?;",
             paramsv![msg_id],
             |row| {
-                let contact_id: i32 = row.get(0)?;
+                let contact_id: i64 = row.get(0)?;
                 let ts: i64 = row.get(1)?;
                 Ok((contact_id, ts))
             },
@@ -1090,7 +1107,7 @@ pub async fn get_msg_info(context: &Context, msg_id: MsgId) -> Result<String, Er
             let fts = dc_timestamp_to_str(ts);
             ret += &format!("Read: {}", fts);
 
-            let name = Contact::load_from_db(context, contact_id as u32)
+            let name = Contact::load_from_db(context, contact_id)
                 .await
                 .map(|contact| contact.get_name_n_addr())
                 .unwrap_or_default();
@@ -1255,7 +1272,7 @@ pub async fn delete_msgs(context: &Context, msg_ids: &[MsgId]) {
         }
         job::add(
             context,
-            job::Job::new(Action::DeleteMsgOnImap, msg_id.to_u32(), Params::new(), 0),
+            job::Job::new(Action::DeleteMsgOnImap, msg_id.to_i64(), Params::new(), 0),
         )
         .await;
     }
@@ -1278,8 +1295,8 @@ async fn delete_poi_location(context: &Context, location_id: u32) -> bool {
     context
         .sql
         .execute(
-            "DELETE FROM locations WHERE independent = 1 AND id=?;",
-            paramsv![location_id as i32],
+            sqlx::query("DELETE FROM locations WHERE independent = 1 AND id=?;")
+                .bind(location_id as i32),
         )
         .await
         .is_ok()
@@ -1342,14 +1359,14 @@ pub async fn markseen_msgs(context: &Context, msg_ids: Vec<MsgId>) -> bool {
 
                 job::add(
                     context,
-                    job::Job::new(Action::MarkseenMsgOnImap, id.to_u32(), Params::new(), 0),
+                    job::Job::new(Action::MarkseenMsgOnImap, id.to_i64(), Params::new(), 0),
                 )
                 .await;
                 updated_chat_ids.insert(curr_chat_id, true);
             }
         } else if curr_state == MessageState::InFresh {
             update_msg_state(context, id, MessageState::InNoticed).await;
-            updated_chat_ids.insert(ChatId::new(DC_CHAT_ID_DEADDROP), true);
+            updated_chat_ids.insert(DC_CHAT_ID_DEADDROP, true);
         }
     }
 
@@ -1364,8 +1381,9 @@ pub async fn update_msg_state(context: &Context, msg_id: MsgId, state: MessageSt
     context
         .sql
         .execute(
-            "UPDATE msgs SET state=? WHERE id=?;",
-            paramsv![state, msg_id],
+            sqlx::query("UPDATE msgs SET state=? WHERE id=?;")
+                .bind(state)
+                .bind(msg_id),
         )
         .await
         .is_ok()
@@ -1492,8 +1510,10 @@ pub async fn set_msg_failed(context: &Context, msg_id: MsgId, error: Option<impl
         match context
             .sql
             .execute(
-                "UPDATE msgs SET state=?, error=? WHERE id=?;",
-                paramsv![msg.state, error, msg_id],
+                sqlx::query("UPDATE msgs SET state=?, error=? WHERE id=?;")
+                    .bind(msg.state)
+                    .bind(error)
+                    .bind(msg_id),
             )
             .await
         {
@@ -1511,7 +1531,7 @@ pub async fn set_msg_failed(context: &Context, msg_id: MsgId, error: Option<impl
 /// returns Some if an event should be send
 pub async fn handle_mdn(
     context: &Context,
-    from_id: u32,
+    from_id: i64,
     rfc724_mid: &str,
     timestamp_sent: i64,
 ) -> anyhow::Result<Option<(ChatId, MsgId)>> {
@@ -1565,8 +1585,10 @@ pub async fn handle_mdn(
 
             if !mdn_already_in_table {
                 context.sql.execute(
-                    "INSERT INTO msgs_mdns (msg_id, contact_id, timestamp_sent) VALUES (?, ?, ?);",
-                    paramsv![msg_id, from_id as i32, timestamp_sent],
+                    sqlx::query("INSERT INTO msgs_mdns (msg_id, contact_id, timestamp_sent) VALUES (?, ?, ?);")
+                        .bind(msg_id)
+                        .bind(from_id)
+                        .bind(timestamp_sent)
                 )
                     .await
                            .unwrap_or_default(); // TODO: better error handling
@@ -1764,7 +1786,7 @@ pub async fn estimate_deletion_cnt(
                     DC_MSG_ID_LAST_SPECIAL,
                     threshold_timestamp,
                     self_chat_id,
-                    ChatId::new(DC_CHAT_ID_TRASH)
+                    DC_CHAT_ID_TRASH
                 ],
                 |row| row.get(0),
             )
@@ -1833,9 +1855,13 @@ pub async fn update_server_uid(
     match context
         .sql
         .execute(
-            "UPDATE msgs SET server_folder=?, server_uid=? \
+            sqlx::query(
+                "UPDATE msgs SET server_folder=?, server_uid=? \
              WHERE rfc724_mid=?",
-            paramsv![server_folder.as_ref(), server_uid, rfc724_mid],
+            )
+            .bind(server_folder.as_ref())
+            .bind(server_uid as i64)
+            .bind(rfc724_mid),
         )
         .await
     {

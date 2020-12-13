@@ -374,7 +374,7 @@ impl Context {
         id: StockMessage,
         param1: impl AsRef<str>,
         param2: impl AsRef<str>,
-        from_id: u32,
+        from_id: i64,
     ) -> String {
         let insert1 = if id == StockMessage::MsgAddMember || id == StockMessage::MsgDelMember {
             let contact_id = Contact::lookup_id_by_addr(self, param1.as_ref(), Origin::Unknown)
@@ -416,7 +416,7 @@ impl Context {
     }
 
     /// Returns a stock message saying that protection status has changed.
-    pub async fn stock_protection_msg(&self, protect: ProtectionStatus, from_id: u32) -> String {
+    pub async fn stock_protection_msg(&self, protect: ProtectionStatus, from_id: i64) -> String {
         self.stock_system_msg(
             match protect {
                 ProtectionStatus::Protected => StockMessage::ProtectionEnabled,
