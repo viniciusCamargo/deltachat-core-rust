@@ -3,10 +3,13 @@
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
 use std::ops::Deref;
+use std::time::SystemTime;
 
 use async_std::path::{Path, PathBuf};
+use async_std::prelude::*;
 use async_std::sync::{channel, Arc, Mutex, Receiver, RwLock, Sender};
 use async_std::task;
+use sqlx::Row;
 
 use crate::chat::*;
 use crate::config::Config;
@@ -21,7 +24,6 @@ use crate::message::{self, MsgId};
 use crate::scheduler::Scheduler;
 use crate::securejoin::Bob;
 use crate::sql::Sql;
-use std::time::SystemTime;
 
 #[derive(Clone, Debug)]
 pub struct Context {
@@ -351,11 +353,13 @@ impl Context {
         Ok(res)
     }
 
-    pub async fn get_fresh_msgs(&self) -> Vec<MsgId> {
+    pub async fn get_fresh_msgs(&self) -> Result<Vec<MsgId>> {
         let show_deaddrop: i32 = 0;
-        self.sql
-            .query_map(
-                concat!(
+
+        let list = self
+            .sql
+            .fetch(
+                sqlx::query(concat!(
                     "SELECT m.id",
                     " FROM msgs m",
                     " LEFT JOIN contacts ct",
@@ -368,26 +372,24 @@ impl Context {
                     "   AND ct.blocked=0",
                     "   AND (c.blocked=0 OR c.blocked=?)",
                     " ORDER BY m.timestamp DESC,m.id DESC;"
-                ),
-                paramsv![10, 9, if 0 != show_deaddrop { 2 } else { 0 }],
-                |row| row.get::<_, MsgId>(0),
-                |rows| {
-                    let mut ret = Vec::new();
-                    for row in rows {
-                        ret.push(row?);
-                    }
-                    Ok(ret)
-                },
+                ))
+                .bind(10i32)
+                .bind(9i32)
+                .bind(if 0 != show_deaddrop { 2i32 } else { 0i32 }),
             )
-            .await
-            .unwrap_or_default()
+            .await?
+            .map(|row| row?.try_get(0))
+            .collect::<sqlx::Result<_>>()
+            .await?;
+
+        Ok(list)
     }
 
     #[allow(non_snake_case)]
-    pub async fn search_msgs(&self, chat_id: ChatId, query: impl AsRef<str>) -> Vec<MsgId> {
+    pub async fn search_msgs(&self, chat_id: ChatId, query: impl AsRef<str>) -> Result<Vec<MsgId>> {
         let real_query = query.as_ref().trim();
         if real_query.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         let strLikeInText = format!("%{}%", real_query);
         let strLikeBeg = format!("{}%", real_query);
@@ -421,21 +423,19 @@ impl Context {
             )
         };
 
-        self.sql
-            .query_map(
-                query,
-                paramsv![chat_id, strLikeInText, strLikeBeg],
-                |row| row.get::<_, MsgId>("id"),
-                |rows| {
-                    let mut ret = Vec::new();
-                    for id in rows {
-                        ret.push(id?);
-                    }
-                    Ok(ret)
-                },
+        let list = self
+            .sql
+            .fetch(
+                sqlx::query(query)
+                    .bind(chat_id)
+                    .bind(strLikeInText)
+                    .bind(strLikeBeg),
             )
-            .await
-            .unwrap_or_default()
+            .await?
+            .map(|row| row?.try_get("id"))
+            .collect::<sqlx::Result<_>>()
+            .await?;
+        Ok(list)
     }
 
     pub async fn is_inbox(&self, folder_name: impl AsRef<str>) -> Result<bool> {
@@ -519,7 +519,7 @@ mod tests {
     async fn test_get_fresh_msgs() {
         let t = TestContext::new().await;
         let fresh = t.get_fresh_msgs().await;
-        assert!(fresh.is_empty())
+        assert!(fresh.unwrap().is_empty())
     }
 
     #[async_std::test]
