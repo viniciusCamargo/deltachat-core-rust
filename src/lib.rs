@@ -1,9 +1,9 @@
-#![forbid(unsafe_code)]
 #![deny(
     clippy::correctness,
     missing_debug_implementations,
     clippy::all,
-    clippy::indexing_slicing
+    clippy::indexing_slicing,
+    unsafe_code
 )]
 #![allow(clippy::match_bool, clippy::eval_order_dependence)]
 
@@ -11,15 +11,9 @@
 extern crate num_derive;
 #[macro_use]
 extern crate smallvec;
-#[macro_use]
-extern crate rusqlite;
 extern crate strum;
 #[macro_use]
 extern crate strum_macros;
-
-pub trait ToSql: rusqlite::ToSql + Send + Sync {}
-
-impl<T: rusqlite::ToSql + Send + Sync> ToSql for T {}
 
 #[macro_use]
 pub mod log;

@@ -7,7 +7,6 @@ use std::fmt;
 use std::future::Future;
 
 use async_std::prelude::*;
-use deltachat_derive::{FromSql, ToSql};
 use itertools::Itertools;
 use rand::{thread_rng, Rng};
 use sqlx::Row;
@@ -41,19 +40,7 @@ use crate::{scheduler::InterruptInfo, sql};
 const JOB_RETRIES: u32 = 17;
 
 /// Thread IDs
-#[derive(
-    Debug,
-    Display,
-    Copy,
-    Clone,
-    PartialEq,
-    Eq,
-    FromPrimitive,
-    ToPrimitive,
-    FromSql,
-    ToSql,
-    sqlx::Type,
-)]
+#[derive(Debug, Display, Copy, Clone, PartialEq, Eq, FromPrimitive, ToPrimitive, sqlx::Type)]
 #[repr(i32)]
 pub(crate) enum Thread {
     Unknown = 0,
@@ -91,18 +78,7 @@ impl Default for Thread {
 }
 
 #[derive(
-    Debug,
-    Display,
-    Copy,
-    Clone,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    FromPrimitive,
-    ToPrimitive,
-    FromSql,
-    ToSql,
-    sqlx::Type,
+    Debug, Display, Copy, Clone, PartialEq, Eq, PartialOrd, FromPrimitive, ToPrimitive, sqlx::Type,
 )]
 #[repr(i32)]
 pub enum Action {

@@ -2,7 +2,6 @@
 
 use async_std::path::PathBuf;
 use async_std::prelude::*;
-use deltachat_derive::*;
 use itertools::Itertools;
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -73,18 +72,7 @@ pub struct Contact {
 
 /// Possible origins of a contact.
 #[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    FromPrimitive,
-    ToPrimitive,
-    FromSql,
-    ToSql,
-    sqlx::Type,
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, FromPrimitive, ToPrimitive, sqlx::Type,
 )]
 #[repr(i32)]
 pub enum Origin {

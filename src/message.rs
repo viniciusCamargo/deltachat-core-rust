@@ -2,7 +2,6 @@
 
 use async_std::path::{Path, PathBuf};
 use async_std::prelude::*;
-use deltachat_derive::{FromSql, ToSql};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
@@ -183,41 +182,6 @@ impl std::fmt::Display for MsgId {
     }
 }
 
-/// Allow converting [MsgId] to an SQLite type.
-///
-/// This allows you to directly store [MsgId] into the database.
-///
-/// # Errors
-///
-/// This **does** ensure that no special message IDs are written into
-/// the database and the conversion will fail if this is not the case.
-impl rusqlite::types::ToSql for MsgId {
-    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput> {
-        if self.0 <= DC_MSG_ID_LAST_SPECIAL {
-            return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(
-                InvalidMsgId,
-            )));
-        }
-        let val = rusqlite::types::Value::Integer(self.0 as i64);
-        let out = rusqlite::types::ToSqlOutput::Owned(val);
-        Ok(out)
-    }
-}
-
-/// Allow converting an SQLite integer directly into [MsgId].
-impl rusqlite::types::FromSql for MsgId {
-    fn column_result(value: rusqlite::types::ValueRef) -> rusqlite::types::FromSqlResult<Self> {
-        // Would be nice if we could use match here, but alas.
-        i64::column_result(value).and_then(|val| {
-            if 0 <= val && val <= std::u32::MAX as i64 {
-                Ok(MsgId::new(val))
-            } else {
-                Err(rusqlite::types::FromSqlError::OutOfRange(val))
-            }
-        })
-    }
-}
-
 /// Message ID was invalid.
 ///
 /// This usually occurs when trying to use a message ID of
@@ -228,17 +192,7 @@ impl rusqlite::types::FromSql for MsgId {
 pub struct InvalidMsgId;
 
 #[derive(
-    Debug,
-    Copy,
-    Clone,
-    PartialEq,
-    FromPrimitive,
-    ToPrimitive,
-    FromSql,
-    ToSql,
-    Serialize,
-    Deserialize,
-    sqlx::Type,
+    Debug, Copy, Clone, PartialEq, FromPrimitive, ToPrimitive, Serialize, Deserialize, sqlx::Type,
 )]
 #[repr(i8)]
 pub(crate) enum MessengerMessage {
@@ -850,8 +804,6 @@ impl Message {
     Eq,
     FromPrimitive,
     ToPrimitive,
-    ToSql,
-    FromSql,
     Serialize,
     Deserialize,
     sqlx::Type,

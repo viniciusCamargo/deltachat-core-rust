@@ -1,5 +1,4 @@
 //! # Constants
-use deltachat_derive::*;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
@@ -16,8 +15,6 @@ pub static DC_VERSION_STR: Lazy<String> = Lazy::new(|| env!("CARGO_PKG_VERSION")
     Eq,
     FromPrimitive,
     ToPrimitive,
-    FromSql,
-    ToSql,
     Serialize,
     Deserialize,
     sqlx::Type,
@@ -35,7 +32,7 @@ impl Default for Blocked {
     }
 }
 
-#[derive(Debug, Display, Clone, Copy, PartialEq, Eq, FromPrimitive, ToPrimitive, FromSql, ToSql)]
+#[derive(Debug, Display, Clone, Copy, PartialEq, Eq, FromPrimitive, ToPrimitive)]
 #[repr(u8)]
 pub enum ShowEmails {
     Off = 0,
@@ -49,7 +46,7 @@ impl Default for ShowEmails {
     }
 }
 
-#[derive(Debug, Display, Clone, Copy, PartialEq, Eq, FromPrimitive, ToPrimitive, FromSql, ToSql)]
+#[derive(Debug, Display, Clone, Copy, PartialEq, Eq, FromPrimitive, ToPrimitive)]
 #[repr(u8)]
 pub enum MediaQuality {
     Balanced = 0,
@@ -62,7 +59,7 @@ impl Default for MediaQuality {
     }
 }
 
-#[derive(Debug, Display, Clone, Copy, PartialEq, Eq, FromPrimitive, ToPrimitive, FromSql, ToSql)]
+#[derive(Debug, Display, Clone, Copy, PartialEq, Eq, FromPrimitive, ToPrimitive)]
 #[repr(u8)]
 pub enum KeyGenType {
     Default = 0,
@@ -76,7 +73,7 @@ impl Default for KeyGenType {
     }
 }
 
-#[derive(Debug, Display, Clone, Copy, PartialEq, Eq, FromPrimitive, ToPrimitive, FromSql, ToSql)]
+#[derive(Debug, Display, Clone, Copy, PartialEq, Eq, FromPrimitive, ToPrimitive)]
 #[repr(i8)]
 pub enum VideochatType {
     Unknown = 0,
@@ -135,8 +132,6 @@ pub const DC_CHAT_ID_LAST_SPECIAL: ChatId = ChatId::new(9);
     Eq,
     FromPrimitive,
     ToPrimitive,
-    FromSql,
-    ToSql,
     IntoStaticStr,
     Serialize,
     Deserialize,
@@ -224,8 +219,6 @@ pub const DEFAULT_MAX_SMTP_RCPT_TO: usize = 50;
     Eq,
     FromPrimitive,
     ToPrimitive,
-    FromSql,
-    ToSql,
     Serialize,
     Deserialize,
     sqlx::Type,

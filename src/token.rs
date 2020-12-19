@@ -4,26 +4,12 @@
 //!
 //! Tokens are used in countermitm verification protocols.
 
-use deltachat_derive::*;
-
 use crate::chat::ChatId;
 use crate::context::Context;
 use crate::dc_tools::*;
 
 /// Token namespace
-#[derive(
-    Debug,
-    Display,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    FromPrimitive,
-    ToPrimitive,
-    ToSql,
-    FromSql,
-    sqlx::Type,
-)]
+#[derive(Debug, Display, Clone, Copy, PartialEq, Eq, FromPrimitive, ToPrimitive, sqlx::Type)]
 #[repr(i32)]
 pub enum Namespace {
     Unknown = 0,

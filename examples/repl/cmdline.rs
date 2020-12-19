@@ -28,17 +28,13 @@ use deltachat::{config, provider};
 async fn reset_tables(context: &Context, bits: i32) {
     println!("Resetting tables ({})...", bits);
     if 0 != bits & 1 {
-        context
-            .sql()
-            .execute("DELETE FROM jobs;", paramsv![])
-            .await
-            .unwrap();
+        context.sql().execute("DELETE FROM jobs;").await.unwrap();
         println!("(1) Jobs reset.");
     }
     if 0 != bits & 2 {
         context
             .sql()
-            .execute("DELETE FROM acpeerstates;", paramsv![])
+            .execute("DELETE FROM acpeerstates;")
             .await
             .unwrap();
         println!("(2) Peerstates reset.");
@@ -46,7 +42,7 @@ async fn reset_tables(context: &Context, bits: i32) {
     if 0 != bits & 4 {
         context
             .sql()
-            .execute("DELETE FROM keypairs;", paramsv![])
+            .execute("DELETE FROM keypairs;")
             .await
             .unwrap();
         println!("(4) Private keypairs reset.");
@@ -54,35 +50,34 @@ async fn reset_tables(context: &Context, bits: i32) {
     if 0 != bits & 8 {
         context
             .sql()
-            .execute("DELETE FROM contacts WHERE id>9;", paramsv![])
+            .execute("DELETE FROM contacts WHERE id>9;")
             .await
             .unwrap();
         context
             .sql()
-            .execute("DELETE FROM chats WHERE id>9;", paramsv![])
+            .execute("DELETE FROM chats WHERE id>9;")
             .await
             .unwrap();
         context
             .sql()
-            .execute("DELETE FROM chats_contacts;", paramsv![])
+            .execute("DELETE FROM chats_contacts;")
             .await
             .unwrap();
         context
             .sql()
-            .execute("DELETE FROM msgs WHERE id>9;", paramsv![])
+            .execute("DELETE FROM msgs WHERE id>9;")
             .await
             .unwrap();
         context
             .sql()
             .execute(
                 "DELETE FROM config WHERE keyname LIKE 'imap.%' OR keyname LIKE 'configured%';",
-                paramsv![],
             )
             .await
             .unwrap();
         context
             .sql()
-            .execute("DELETE FROM leftgrps;", paramsv![])
+            .execute("DELETE FROM leftgrps;")
             .await
             .unwrap();
         println!("(8) Rest but server config reset.");
@@ -193,7 +188,7 @@ async fn log_msg(context: &Context, prefix: impl AsRef<str>, msg: &Message) {
         &contact_name,
         contact_id,
         msgtext.unwrap_or_default(),
-        if msg.get_from_id() == 1 as libc::c_uint {
+        if msg.get_from_id() == 1 {
             ""
         } else if msg.get_state() == MessageState::InSeen {
             "[SEEN]"
@@ -250,7 +245,7 @@ async fn log_msglist(context: &Context, msglist: &[MsgId]) -> Result<(), Error> 
     Ok(())
 }
 
-async fn log_contactlist(context: &Context, contacts: &[u32]) {
+async fn log_contactlist(context: &Context, contacts: &[i64]) {
     let mut contacts = contacts.to_vec();
     if !contacts.contains(&1) {
         contacts.push(1);
@@ -288,7 +283,7 @@ async fn log_contactlist(context: &Context, contacts: &[u32]) {
             let peerstate = Peerstate::from_addr(context, &addr)
                 .await
                 .expect("peerstate error");
-            if peerstate.is_some() && contact_id != 1 as libc::c_uint {
+            if peerstate.is_some() && contact_id != 1 {
                 line2 = format!(
                     ", prefer-encrypt={}",
                     peerstate.as_ref().unwrap().prefer_encrypt
@@ -600,7 +595,7 @@ pub async fn cmdline(context: Context, line: &str, chat_id: &mut ChatId) -> Resu
                 })
                 .collect();
 
-            let members = chat::get_chat_contacts(&context, sel_chat.id).await;
+            let members = chat::get_chat_contacts(&context, sel_chat.id).await?;
             let subtitle = if sel_chat.is_device_talk() {
                 "device-talk".to_string()
             } else if sel_chat.get_type() == Chattype::Single && !members.is_empty() {
@@ -647,7 +642,7 @@ pub async fn cmdline(context: Context, line: &str, chat_id: &mut ChatId) -> Resu
         "createchat" => {
             ensure!(!arg1.is_empty(), "Argument <contact-id> missing.");
             let contact_id: libc::c_int = arg1.parse()?;
-            let chat_id = chat::create_by_contact_id(&context, contact_id as u32).await?;
+            let chat_id = chat::create_by_contact_id(&context, contact_id as i64).await?;
 
             println!("Single#{} created successfully.", chat_id,);
         }
@@ -677,11 +672,11 @@ pub async fn cmdline(context: Context, line: &str, chat_id: &mut ChatId) -> Resu
             ensure!(sel_chat.is_some(), "No chat selected");
             ensure!(!arg1.is_empty(), "Argument <contact-id> missing.");
 
-            let contact_id_0: libc::c_int = arg1.parse()?;
+            let contact_id_0: i64 = arg1.parse()?;
             if chat::add_contact_to_chat(
                 &context,
                 sel_chat.as_ref().unwrap().get_id(),
-                contact_id_0 as u32,
+                contact_id_0,
             )
             .await
             {
@@ -693,11 +688,11 @@ pub async fn cmdline(context: Context, line: &str, chat_id: &mut ChatId) -> Resu
         "removemember" => {
             ensure!(sel_chat.is_some(), "No chat selected.");
             ensure!(!arg1.is_empty(), "Argument <contact-id> missing.");
-            let contact_id_1: libc::c_int = arg1.parse()?;
+            let contact_id_1: i64 = arg1.parse()?;
             chat::remove_contact_from_chat(
                 &context,
                 sel_chat.as_ref().unwrap().get_id(),
-                contact_id_1 as u32,
+                contact_id_1,
             )
             .await?;
 
@@ -723,7 +718,7 @@ pub async fn cmdline(context: Context, line: &str, chat_id: &mut ChatId) -> Resu
             ensure!(sel_chat.is_some(), "No chat selected.");
 
             let contacts =
-                chat::get_chat_contacts(&context, sel_chat.as_ref().unwrap().get_id()).await;
+                chat::get_chat_contacts(&context, sel_chat.as_ref().unwrap().get_id()).await?;
             println!("Memberlist:");
 
             log_contactlist(&context, &contacts).await;
@@ -748,7 +743,7 @@ pub async fn cmdline(context: Context, line: &str, chat_id: &mut ChatId) -> Resu
                 0,
                 0,
             )
-            .await;
+            .await?;
             let default_marker = "-".to_string();
             for location in &locations {
                 let marker = location.marker.as_ref().unwrap_or(&default_marker);
@@ -844,7 +839,7 @@ pub async fn cmdline(context: Context, line: &str, chat_id: &mut ChatId) -> Resu
                 ChatId::new(0)
             };
 
-            let msglist = context.search_msgs(chat, arg1).await;
+            let msglist = context.search_msgs(chat, arg1).await?;
 
             log_msglist(&context, &msglist).await?;
             println!("{} messages.", msglist.len());
@@ -891,7 +886,7 @@ pub async fn cmdline(context: Context, line: &str, chat_id: &mut ChatId) -> Resu
                 Viewtype::Gif,
                 Viewtype::Video,
             )
-            .await;
+            .await?;
             println!("{} images or videos: ", images.len());
             for (i, data) in images.iter().enumerate() {
                 if 0 == i {
@@ -943,7 +938,7 @@ pub async fn cmdline(context: Context, line: &str, chat_id: &mut ChatId) -> Resu
             println!("{}", res);
         }
         "listfresh" => {
-            let msglist = context.get_fresh_msgs().await;
+            let msglist = context.get_fresh_msgs().await?;
 
             log_msglist(&context, &msglist).await?;
             print!("{} fresh messages.", msglist.len());
@@ -1079,7 +1074,7 @@ pub async fn cmdline(context: Context, line: &str, chat_id: &mut ChatId) -> Resu
         //     let r = context.emit_event(event, 0 as libc::uintptr_t, 0 as libc::uintptr_t);
         //     println!(
         //         "Sending event {:?}({}), received value {}.",
-        //         event, event as usize, r as libc::c_int,
+        //         event, event as usize, r,
         //     );
         // }
         "fileinfo" => {
