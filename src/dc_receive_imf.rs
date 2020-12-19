@@ -3,6 +3,7 @@ use num_traits::FromPrimitive;
 use sha2::{Digest, Sha256};
 
 use mailparse::SingleInfo;
+use sqlx::Row;
 
 use crate::chat::{self, Chat, ChatId, ProtectionStatus};
 use crate::config::Config;
@@ -1033,8 +1034,9 @@ async fn calc_sort_timestamp(
         let last_msg_time: Option<i64> = context
             .sql
             .query_get_value(
-                "SELECT MAX(timestamp) FROM msgs WHERE chat_id=? AND state>?",
-                paramsv![chat_id, MessageState::InFresh],
+                sqlx::query("SELECT MAX(timestamp) FROM msgs WHERE chat_id=? AND state>?")
+                    .bind(chat_id)
+                    .bind(MessageState::InFresh),
             )
             .await?;
 
@@ -1446,34 +1448,25 @@ async fn create_or_lookup_adhoc_group(
     let chat_ids = search_chat_ids_by_contact_ids(context, &member_ids).await?;
     if !chat_ids.is_empty() {
         let chat_ids_str = join(chat_ids.iter().map(|x| x.to_string()), ",");
-        let res = context
-            .sql
-            .query_row(
-                format!(
-                    "SELECT c.id,
-                        c.blocked
-                   FROM chats c
-                   LEFT JOIN msgs m
-                          ON m.chat_id=c.id
-                  WHERE c.id IN({})
-                  ORDER BY m.timestamp DESC,
-                           m.id DESC
-                  LIMIT 1;",
-                    chat_ids_str
-                ),
-                paramsv![],
-                |row| {
-                    Ok((
-                        row.get::<_, ChatId>(0)?,
-                        row.get::<_, Option<Blocked>>(1)?.unwrap_or_default(),
-                    ))
-                },
-            )
-            .await;
+        let q = format!(
+            "SELECT c.id, c.blocked
+               FROM chats c
+               LEFT JOIN msgs m
+                      ON m.chat_id=c.id
+               WHERE c.id IN({})
+               ORDER BY m.timestamp DESC,
+                        m.id DESC
+               LIMIT 1;",
+            chat_ids_str
+        );
+        let row = context.sql.fetch_one(sqlx::query(&q)).await;
 
-        if let Ok((id, id_blocked)) = res {
-            /* success, chat found */
-            return Ok((id, id_blocked));
+        if let Ok(row) = row {
+            // success, chat found
+            return Ok((
+                row.try_get(0)?,
+                row.try_get::<Option<Blocked>, _>(1)?.unwrap_or_default(),
+            ));
         }
     }
 

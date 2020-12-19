@@ -65,9 +65,10 @@ pub async fn lookup(
 ) -> crate::sql::Result<Option<String>> {
     let token = context
         .sql
-        .query_get_value::<String>(
-            "SELECT token FROM tokens WHERE namespc=? AND foreign_id=?;",
-            paramsv![namespace, foreign_id],
+        .query_get_value(
+            sqlx::query("SELECT token FROM tokens WHERE namespc=? AND foreign_id=?;")
+                .bind(namespace)
+                .bind(foreign_id),
         )
         .await?;
     Ok(token)

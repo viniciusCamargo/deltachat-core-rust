@@ -1,5 +1,6 @@
 use chrono::TimeZone;
 use lettre_email::{mime, Address, Header, MimeMultipartType, PartBuilder};
+use sqlx::Row;
 
 use crate::blob::BlobObject;
 use crate::chat::{self, Chat};
@@ -118,22 +119,17 @@ impl<'a, 'b> MimeFactory<'a, 'b> {
                 req_mdn = true;
             }
         }
-        let (in_reply_to, references) = context
+        let row = context
             .sql
-            .query_row(
-                "SELECT mime_in_reply_to, mime_references FROM msgs WHERE id=?",
-                paramsv![msg.id],
-                |row| {
-                    let in_reply_to: String = row.get(0)?;
-                    let references: String = row.get(1)?;
-
-                    Ok((
-                        render_rfc724_mid_list(&in_reply_to),
-                        render_rfc724_mid_list(&references),
-                    ))
-                },
+            .fetch_one(
+                sqlx::query("SELECT mime_in_reply_to, mime_references FROM msgs WHERE id=?")
+                    .bind(msg.id),
             )
             .await?;
+        let (in_reply_to, references) = (
+            render_rfc724_mid_list(row.try_get(0)?),
+            render_rfc724_mid_list(row.try_get(1)?),
+        );
 
         let default_str = context
             .stock_str(StockMessage::StatusLine)
