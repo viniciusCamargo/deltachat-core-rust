@@ -155,9 +155,9 @@ impl Default for Chattype {
     }
 }
 
-pub const DC_MSG_ID_MARKER1: u32 = 1;
-pub const DC_MSG_ID_DAYMARKER: u32 = 9;
-pub const DC_MSG_ID_LAST_SPECIAL: u32 = 9;
+pub const DC_MSG_ID_MARKER1: i64 = 1;
+pub const DC_MSG_ID_DAYMARKER: i64 = 9;
+pub const DC_MSG_ID_LAST_SPECIAL: i64 = 9;
 
 /// approx. max. length returned by dc_msg_get_text()
 pub const DC_MAX_GET_TEXT_LEN: usize = 30000;

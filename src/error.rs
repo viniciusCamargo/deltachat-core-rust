@@ -2,6 +2,10 @@
 
 pub use anyhow::{bail, ensure, format_err, Error, Result};
 
+#[derive(Debug, thiserror::Error)]
+#[error("Out of Range")]
+pub struct OutOfRangeError;
+
 #[macro_export]
 macro_rules! ensure_eq {
     ($left:expr, $right:expr) => ({

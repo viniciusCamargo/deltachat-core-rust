@@ -474,13 +474,13 @@ impl Message {
         self.id
     }
 
-    pub fn get_from_id(&self) -> u32 {
+    pub fn get_from_id(&self) -> i64 {
         self.from_id
     }
 
     pub fn get_chat_id(&self) -> ChatId {
         if self.chat_blocked != Blocked::Not {
-            ChatId::new(DC_CHAT_ID_DEADDROP)
+            DC_CHAT_ID_DEADDROP
         } else {
             self.chat_id
         }
@@ -600,8 +600,8 @@ impl Message {
 
     pub fn is_info(&self) -> bool {
         let cmd = self.param.get_cmd();
-        self.from_id == DC_CONTACT_ID_INFO as u32
-            || self.to_id == DC_CONTACT_ID_INFO as u32
+        self.from_id == DC_CONTACT_ID_INFO
+            || self.to_id == DC_CONTACT_ID_INFO
             || cmd != SystemMessage::Unknown && cmd != SystemMessage::AutocryptSetupMessage
     }
 

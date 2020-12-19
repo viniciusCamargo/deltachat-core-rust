@@ -57,7 +57,7 @@ impl Lot {
         self.state
     }
 
-    pub fn get_id(&self) -> u32 {
+    pub fn get_id(&self) -> i64 {
         self.id
     }
 

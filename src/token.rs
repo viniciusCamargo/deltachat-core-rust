@@ -11,7 +11,19 @@ use crate::context::Context;
 use crate::dc_tools::*;
 
 /// Token namespace
-#[derive(Debug, Display, Clone, Copy, PartialEq, Eq, FromPrimitive, ToPrimitive, ToSql, FromSql)]
+#[derive(
+    Debug,
+    Display,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    FromPrimitive,
+    ToPrimitive,
+    ToSql,
+    FromSql,
+    sqlx::Type,
+)]
 #[repr(i32)]
 pub enum Namespace {
     Unknown = 0,
@@ -38,7 +50,7 @@ pub async fn save(context: &Context, namespace: Namespace, foreign_id: ChatId) -
             )
             .bind(namespace)
             .bind(foreign_id)
-            .bind(token)
+            .bind(&token)
             .bind(time()),
         )
         .await

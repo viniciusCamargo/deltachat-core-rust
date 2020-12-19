@@ -683,9 +683,7 @@ impl Job {
         // Make sure that if there now is a chat with a contact (created by an outgoing message), then group contact requests
         // from this contact should also be unblocked.
         // See https://github.com/deltachat/deltachat-core-rust/issues/2097.
-        for item in
-            job_try!(chat::get_chat_msgs(context, ChatId::new(DC_CHAT_ID_DEADDROP), 0, None).await)
-        {
+        for item in job_try!(chat::get_chat_msgs(context, DC_CHAT_ID_DEADDROP, 0, None).await) {
             if let ChatItem::Message { msg_id } = item {
                 let msg = match Message::load_from_db(context, msg_id).await {
                     Err(e) => {

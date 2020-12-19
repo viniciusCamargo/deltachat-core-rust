@@ -112,7 +112,7 @@ impl ChatId {
     ///
     /// This kind of chat ID can not be used for real chats.
     pub fn is_special(self) -> bool {
-        matches!(self.0, 0..=DC_CHAT_ID_LAST_SPECIAL)
+        (0..=DC_CHAT_ID_LAST_SPECIAL.0).contains(&self.0)
     }
 
     /// Chat ID which represents the deaddrop chat.
@@ -121,7 +121,7 @@ impl ChatId {
     /// flagged with [Blocked::Deaddrop].  Usually the UI will show
     /// these messages as contact requests.
     pub fn is_deaddrop(self) -> bool {
-        self.0 == DC_CHAT_ID_DEADDROP
+        self == DC_CHAT_ID_DEADDROP
     }
 
     /// Chat ID for messages which need to be deleted.
@@ -131,7 +131,7 @@ impl ChatId {
     /// as they are not deleted on the server so that their rfc724_mid
     /// remains known and downloading them again can be avoided.
     pub fn is_trash(self) -> bool {
-        self.0 == DC_CHAT_ID_TRASH
+        self == DC_CHAT_ID_TRASH
     }
 
     /// Chat ID signifying there are **any** number of archived chats.
@@ -139,7 +139,7 @@ impl ChatId {
     /// This chat ID can be returned in a [Chatlist] and signals to
     /// the UI to include a link to the archived chats.
     pub fn is_archived_link(self) -> bool {
-        self.0 == DC_CHAT_ID_ARCHIVED_LINK
+        self == DC_CHAT_ID_ARCHIVED_LINK
     }
 
     /// Virtual chat ID signalling there are **only** archived chats.
@@ -148,7 +148,7 @@ impl ChatId {
     /// [DC_GCL_ADD_ALLDONE_HINT] flag is used to build the
     /// [Chatlist].
     pub fn is_alldone_hint(self) -> bool {
-        self.0 == DC_CHAT_ID_ALLDONE_HINT
+        self == DC_CHAT_ID_ALLDONE_HINT
     }
 
     pub async fn set_selfavatar_timestamp(
@@ -1168,7 +1168,7 @@ impl sqlx::Type<sqlx::Sqlite> for ChatVisibility {
     }
 
     fn compatible(ty: &sqlx::sqlite::SqliteTypeInfo) -> bool {
-        <i64 as sqlx::Type<_>>::compatible()
+        <i64 as sqlx::Type<_>>::compatible(ty)
     }
 }
 
@@ -1185,7 +1185,7 @@ impl<'q> sqlx::Encode<'q, sqlx::Sqlite> for ChatVisibility {
 
 impl<'r> sqlx::Decode<'r, sqlx::Sqlite> for ChatVisibility {
     fn decode(value: sqlx::sqlite::SqliteValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
-        let value: i64 = value.decode()?;
+        let value: i64 = sqlx::Decode::decode(value)?;
         Ok(ChatVisibility::from_i64(value))
     }
 }
@@ -2416,7 +2416,7 @@ impl sqlx::Type<sqlx::Sqlite> for MuteDuration {
     }
 
     fn compatible(ty: &sqlx::sqlite::SqliteTypeInfo) -> bool {
-        <i64 as sqlx::Type<_>>::compatible()
+        <i64 as sqlx::Type<_>>::compatible(ty)
     }
 }
 
@@ -2442,7 +2442,7 @@ impl<'q> sqlx::Encode<'q, sqlx::Sqlite> for MuteDuration {
 
 impl<'r> sqlx::Decode<'r, sqlx::Sqlite> for MuteDuration {
     fn decode(value: sqlx::sqlite::SqliteValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
-        let value: i64 = value.decode()?;
+        let value: i64 = sqlx::Decode::decode(value)?;
         // Negative values other than -1 should not be in the
         // database.  If found they'll be NotMuted.
         match value {
@@ -2450,7 +2450,9 @@ impl<'r> sqlx::Decode<'r, sqlx::Sqlite> for MuteDuration {
             -1 => Ok(MuteDuration::Forever),
             n if n > 0 => match SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(n as u64)) {
                 Some(t) => Ok(MuteDuration::Until(t)),
-                None => Err(sqlx::error::Error::Decode("out of range")),
+                None => Err(Box::new(sqlx::error::Error::Decode(Box::new(
+                    crate::error::OutOfRangeError,
+                )))),
             },
             _ => Ok(MuteDuration::NotMuted),
         }
@@ -3100,10 +3102,7 @@ mod tests {
     #[async_std::test]
     async fn test_get_draft_special_chat_id() {
         let t = TestContext::new().await;
-        let draft = ChatId::new(DC_CHAT_ID_LAST_SPECIAL)
-            .get_draft(&t)
-            .await
-            .unwrap();
+        let draft = DC_CHAT_ID_LAST_SPECIAL.get_draft(&t).await.unwrap();
         assert!(draft.is_none());
     }
 
@@ -3160,10 +3159,8 @@ mod tests {
     #[async_std::test]
     async fn test_deaddrop_chat() {
         let t = TestContext::new().await;
-        let chat = Chat::load_from_db(&t, ChatId::new(DC_CHAT_ID_DEADDROP))
-            .await
-            .unwrap();
-        assert_eq!(DC_CHAT_ID_DEADDROP, 1);
+        let chat = Chat::load_from_db(&t, DC_CHAT_ID_DEADDROP).await.unwrap();
+        assert_eq!(DC_CHAT_ID_DEADDROP.0, 1);
         assert!(chat.id.is_deaddrop());
         assert!(!chat.is_self_talk());
         assert!(chat.visibility == ChatVisibility::Normal);
