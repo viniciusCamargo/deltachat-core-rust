@@ -1,5 +1,8 @@
 //! # Chat list module
 
+use async_std::prelude::*;
+use sqlx::Row;
+
 use crate::chat;
 use crate::chat::*;
 use crate::constants::*;
@@ -91,7 +94,7 @@ impl Chatlist {
         context: &Context,
         listflags: usize,
         query: Option<&str>,
-        query_contact_id: Option<u32>,
+        query_contact_id: Option<i64>,
     ) -> Result<Self> {
         let flag_archived_only = 0 != listflags & DC_GCL_ARCHIVED_ONLY;
         let flag_for_forwarding = 0 != listflags & DC_GCL_FOR_FORWARDING;
@@ -106,17 +109,6 @@ impl Chatlist {
 
         let mut add_archived_link_item = false;
 
-        let process_row = |row: &rusqlite::Row| {
-            let chat_id: ChatId = row.get(0)?;
-            let msg_id: MsgId = row.get(1).unwrap_or_default();
-            Ok((chat_id, msg_id))
-        };
-
-        let process_rows = |rows: rusqlite::MappedRows<_>| {
-            rows.collect::<std::result::Result<Vec<_>, _>>()
-                .map_err(Into::into)
-        };
-
         let skip_id = if flag_for_forwarding {
             chat::lookup_by_contact_id(context, DC_CONTACT_ID_DEVICE)
                 .await
@@ -124,6 +116,13 @@ impl Chatlist {
                 .0
         } else {
             ChatId::new(0)
+        };
+
+        let process_row = |row: sqlx::Result<sqlx::sqlite::SqliteRow>| {
+            let row = row?;
+            let chat_id: ChatId = row.try_get(0)?;
+            let msg_id: MsgId = row.try_get(1).unwrap_or_default();
+            Ok((chat_id, msg_id))
         };
 
         // select with left join and minimum:
@@ -141,10 +140,10 @@ impl Chatlist {
         // tg do the same) for the deaddrop, however, they should
         // really be hidden, however, _currently_ the deaddrop is not
         // shown at all permanent in the chatlist.
-        let mut ids = if let Some(query_contact_id) = query_contact_id {
+        let mut ids: Vec<_> = if let Some(query_contact_id) = query_contact_id {
             // show chats shared with a given contact
-            context.sql.query_map(
-                "SELECT c.id, m.id
+            context.sql.fetch(
+                sqlx::query("SELECT c.id, m.id
                  FROM chats c
                  LEFT JOIN msgs m
                         ON c.id=m.chat_id
@@ -158,11 +157,9 @@ impl Chatlist {
                    AND c.blocked=0
                    AND c.id IN(SELECT chat_id FROM chats_contacts WHERE contact_id=?2)
                  GROUP BY c.id
-                 ORDER BY c.archived=?3 DESC, IFNULL(m.timestamp,c.created_timestamp) DESC, m.id DESC;",
-                paramsv![MessageState::OutDraft, query_contact_id as i32, ChatVisibility::Pinned],
-                process_row,
-                process_rows,
-            ).await?
+                 ORDER BY c.archived=?3 DESC, IFNULL(m.timestamp,c.created_timestamp) DESC, m.id DESC;"
+                ).bind(MessageState::OutDraft).bind(query_contact_id).bind(ChatVisibility::Pinned)
+            ).await?.map(process_row).collect::<sqlx::Result<_>>().await?
         } else if flag_archived_only {
             // show archived chats
             // (this includes the archived device-chat; we could skip it,
@@ -170,8 +167,9 @@ impl Chatlist {
             // and adapting the number requires larger refactorings and seems not to be worth the effort)
             context
                 .sql
-                .query_map(
-                    "SELECT c.id, m.id
+                .fetch(
+                    sqlx::query(
+                        "SELECT c.id, m.id
                  FROM chats c
                  LEFT JOIN msgs m
                         ON c.id=m.chat_id
@@ -186,10 +184,12 @@ impl Chatlist {
                    AND c.archived=1
                  GROUP BY c.id
                  ORDER BY IFNULL(m.timestamp,c.created_timestamp) DESC, m.id DESC;",
-                    paramsv![MessageState::OutDraft],
-                    process_row,
-                    process_rows,
+                    )
+                    .bind(MessageState::OutDraft),
                 )
+                .await?
+                .map(process_row)
+                .collect::<sqlx::Result<_>>()
                 .await?
         } else if let Some(query) = query {
             let query = query.trim().to_string();
@@ -204,8 +204,9 @@ impl Chatlist {
             let str_like_cmd = format!("%{}%", query);
             context
                 .sql
-                .query_map(
-                    "SELECT c.id, m.id
+                .fetch(
+                    sqlx::query(
+                        "SELECT c.id, m.id
                  FROM chats c
                  LEFT JOIN msgs m
                         ON c.id=m.chat_id
@@ -220,10 +221,14 @@ impl Chatlist {
                    AND c.name LIKE ?3
                  GROUP BY c.id
                  ORDER BY IFNULL(m.timestamp,c.created_timestamp) DESC, m.id DESC;",
-                    paramsv![MessageState::OutDraft, skip_id, str_like_cmd],
-                    process_row,
-                    process_rows,
+                    )
+                    .bind(MessageState::OutDraft)
+                    .bind(skip_id)
+                    .bind(str_like_cmd),
                 )
+                .await?
+                .map(process_row)
+                .collect::<sqlx::Result<_>>()
                 .await?
         } else {
             //  show normal chatlist
@@ -235,7 +240,7 @@ impl Chatlist {
             } else {
                 ChatId::new(0)
             };
-            let mut ids = context.sql.query_map(
+            let mut ids: Vec<_> = context.sql.fetch(sqlx::query(
                 "SELECT c.id, m.id
                  FROM chats c
                  LEFT JOIN msgs m
@@ -250,11 +255,12 @@ impl Chatlist {
                    AND c.blocked=0
                    AND NOT c.archived=?3
                  GROUP BY c.id
-                 ORDER BY c.id=?4 DESC, c.archived=?5 DESC, IFNULL(m.timestamp,c.created_timestamp) DESC, m.id DESC;",
-                paramsv![MessageState::OutDraft, skip_id, ChatVisibility::Archived, sort_id_up, ChatVisibility::Pinned],
-                process_row,
-                process_rows,
-            ).await?;
+                 ORDER BY c.id=?4 DESC, c.archived=?5 DESC, IFNULL(m.timestamp,c.created_timestamp) DESC, m.id DESC;"
+            )
+              .bind(MessageState::OutDraft).bind(skip_id)
+              .bind(ChatVisibility::Archived)
+              .bind(sort_id_up).bind(ChatVisibility::Pinned)
+            ).await?.map(process_row).collect::<sqlx::Result<_>>().await?;
             if !flag_no_specials {
                 if let Some(last_deaddrop_fresh_msg_id) =
                     get_last_deaddrop_fresh_msg(context).await?
