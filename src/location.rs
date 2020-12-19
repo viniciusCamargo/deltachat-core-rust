@@ -259,8 +259,12 @@ pub async fn is_sending_locations_to_chat(context: &Context, chat_id: ChatId) ->
     context
         .sql
         .exists(
-            "SELECT id  FROM chats  WHERE (? OR id=?)   AND locations_send_until>?;",
-            paramsv![if chat_id.is_unset() { 1 } else { 0 }, chat_id, time()],
+            sqlx::query(
+                "SELECT COUNT(*) FROM chats  WHERE (? OR id=?)   AND locations_send_until>?;",
+            )
+            .bind(if chat_id.is_unset() { 1 } else { 0 })
+            .bind(chat_id)
+            .bind(time()),
         )
         .await
         .unwrap_or_default()

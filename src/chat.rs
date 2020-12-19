@@ -1613,8 +1613,9 @@ pub async fn is_contact_in_chat(context: &Context, chat_id: ChatId, contact_id: 
     context
         .sql
         .exists(
-            "SELECT contact_id FROM chats_contacts WHERE chat_id=? AND contact_id=?;",
-            paramsv![chat_id, contact_id as i32],
+            sqlx::query("SELECT COUNT(*) FROM chats_contacts WHERE chat_id=? AND contact_id=?;")
+                .bind(chat_id)
+                .bind(contact_id as i32),
         )
         .await
         .unwrap_or_default()
@@ -1912,14 +1913,15 @@ pub(crate) async fn marknoticed_chat_if_older_than(
 
 pub async fn marknoticed_chat(context: &Context, chat_id: ChatId) -> Result<(), Error> {
     // "WHERE" below uses the index `(state, hidden, chat_id)`, see get_fresh_msg_cnt() for reasoning
-    if !context
+    let exists = context
         .sql
         .exists(
-            "SELECT id FROM msgs WHERE state=? AND hidden=0 AND chat_id=?;",
-            paramsv![MessageState::InFresh, chat_id],
+            sqlx::query("SELECT COUNT(*) FROM msgs WHERE state=? AND hidden=0 AND chat_id=?;")
+                .bind(MessageState::InFresh)
+                .bind(chat_id),
         )
-        .await?
-    {
+        .await?;
+    if !exists {
         return Ok(());
     }
 
@@ -2279,10 +2281,7 @@ async fn real_group_exists(context: &Context, chat_id: ChatId) -> bool {
 
     context
         .sql
-        .exists(
-            "SELECT id FROM chats WHERE id=? AND type=120;",
-            paramsv![chat_id],
-        )
+        .exists(sqlx::query("SELECT COUNT(*) FROM chats WHERE id=? AND type=120;").bind(chat_id))
         .await
         .unwrap_or_default()
 }
@@ -2582,14 +2581,11 @@ pub(crate) async fn is_group_explicitly_left(
     context: &Context,
     grpid: impl AsRef<str>,
 ) -> Result<bool, Error> {
-    context
+    let count = context
         .sql
-        .exists(
-            "SELECT id FROM leftgrps WHERE grpid=?;",
-            paramsv![grpid.as_ref()],
-        )
-        .await
-        .map_err(Into::into)
+        .execute(sqlx::query("SELECT id FROM leftgrps WHERE grpid=?;").bind(grpid.as_ref()))
+        .await?;
+    Ok(count > 0)
 }
 
 pub async fn set_chat_name(
