@@ -37,29 +37,38 @@ impl Default for Sql {
     }
 }
 
+impl Drop for Sql {
+    fn drop(&mut self) {
+        async_std::task::block_on(self.close());
+    }
+}
+
 impl Sql {
     pub fn new() -> Sql {
         Self::default()
     }
 
+    /// Checks if there is currently a connection to the underlying Sqlite database.
     pub async fn is_open(&self) -> bool {
         self.sql.read().await.is_some()
     }
 
+    /// Closes all underlying Sqlite connections.
     pub async fn close(&self) {
         if let Some(sql) = self.sql.write().await.take() {
             sql.close().await;
         }
-
-        // drop closes the connection
     }
 
+    /// Opens the provided database and runs any necessary migrations.
+    /// If a database is already open, this will return an error.
     pub async fn open<T: AsRef<Path>>(
         &self,
         context: &Context,
         dbfile: T,
         readonly: bool,
     ) -> crate::error::Result<()> {
+        dbg!(dbfile.as_ref());
         if self.is_open().await {
             error!(
                 context,
@@ -70,20 +79,20 @@ impl Sql {
         }
 
         let config = SqliteConnectOptions::new()
+            .journal_mode(SqliteJournalMode::Wal)
             .filename(dbfile.as_ref())
             .read_only(readonly)
+            .busy_timeout(Duration::from_secs(10))
             .create_if_missing(!readonly);
+
         let pool = PoolOptions::<Sqlite>::new()
             .after_connect(|conn| {
                 Box::pin(async move {
-                    let q = format!(
-                        r#"
+                    let q = r#"
 PRAGMA secure_delete=on;
-PRAGMA busy_timeout = {};
 PRAGMA temp_store=memory; -- Avoid SQLITE_IOERR_GETTEMPPATH errors on Android
-"#,
-                        Duration::from_secs(10).as_millis()
-                    );
+"#;
+
                     conn.execute_many(sqlx::query(&q))
                         .collect::<std::result::Result<Vec<_>, _>>()
                         .await?;
@@ -97,23 +106,14 @@ PRAGMA temp_store=memory; -- Avoid SQLITE_IOERR_GETTEMPPATH errors on Android
         }
 
         if !readonly {
-            // journal_mode is persisted, it is sufficient to change it only for one handle.
-            // (nb: execute() always returns errors for this PRAGMA call, just discard it.
-            // but even if execute() would handle errors more gracefully, we should continue on errors -
-            // systems might not be able to handle WAL, in which case the standard-journal is used.
-            // that may be not optimal, but better than not working at all :)
-            self.execute("PRAGMA journal_mode=WAL;").await.ok();
-
             // (1) update low-level database structure.
             // this should be done before updates that use high-level objects that
             // rely themselves on the low-level structure.
-            // --------------------------------------------------------------------
 
             let (recalc_fingerprints, update_icons) = migrations::run(context, &self).await?;
 
             // (2) updates that require high-level objects
-            // (the structure is complete now and all objects are usable)
-            // --------------------------------------------------------------------
+            // the structure is complete now and all objects are usable
 
             if recalc_fingerprints {
                 info!(context, "[migration] recalc fingerprints");
@@ -134,11 +134,12 @@ PRAGMA temp_store=memory; -- Avoid SQLITE_IOERR_GETTEMPPATH errors on Android
             }
         }
 
-        info!(context, "Opened {:?}.", dbfile.as_ref(),);
+        info!(context, "Opened {:?}.", dbfile.as_ref());
 
         Ok(())
     }
 
+    /// Execute the given query, returning the number of affected rows.
     pub async fn execute<'e, 'q, E>(&self, query: E) -> Result<u64>
     where
         'q: 'e,
@@ -151,6 +152,22 @@ PRAGMA temp_store=memory; -- Avoid SQLITE_IOERR_GETTEMPPATH errors on Android
         Ok(rows.rows_affected())
     }
 
+    /// Execute many queries.
+    pub async fn execute_many<'e, 'q, E>(&self, query: E) -> Result<()>
+    where
+        'q: 'e,
+        E: 'q + Execute<'q, Sqlite>,
+    {
+        let lock = self.sql.read().await;
+        let pool = lock.as_ref().ok_or(Error::SqlNoConnection)?;
+
+        pool.execute_many(query)
+            .collect::<sqlx::Result<Vec<_>>>()
+            .await?;
+        Ok(())
+    }
+
+    /// Fetch the given query.
     pub async fn fetch<'e, 'q, E>(
         &self,
         query: E,
@@ -166,6 +183,7 @@ PRAGMA temp_store=memory; -- Avoid SQLITE_IOERR_GETTEMPPATH errors on Android
         Ok(rows)
     }
 
+    /// Fetch exactly one row, errors if no row is found.
     pub async fn fetch_one<'e, 'q, E>(&self, query: E) -> Result<<Sqlite as sqlx::Database>::Row>
     where
         'q: 'e,
@@ -178,6 +196,7 @@ PRAGMA temp_store=memory; -- Avoid SQLITE_IOERR_GETTEMPPATH errors on Android
         Ok(row)
     }
 
+    /// Fetches at most one row.
     pub async fn fetch_optional<'e, 'q, E>(
         &self,
         query: E,
@@ -193,6 +212,7 @@ PRAGMA temp_store=memory; -- Avoid SQLITE_IOERR_GETTEMPPATH errors on Android
         Ok(row)
     }
 
+    /// Used for executing `SELECT COUNT` statements only. Returns the resulting count.
     pub async fn count<'e, 'q, E>(&self, query: E) -> Result<usize>
     where
         'q: 'e,
@@ -206,6 +226,8 @@ PRAGMA temp_store=memory; -- Avoid SQLITE_IOERR_GETTEMPPATH errors on Android
         Ok(usize::try_from(count).unwrap())
     }
 
+    /// Used for executing `SELECT COUNT` statements only. Returns `true`, if the count is at least
+    /// one, `false` otherwise.
     pub async fn exists<'e, 'q, E>(&self, query: E) -> Result<bool>
     where
         'q: 'e,
@@ -217,7 +239,8 @@ PRAGMA temp_store=memory; -- Avoid SQLITE_IOERR_GETTEMPPATH errors on Android
 
     /// Execute the function inside a transaction.
     ///
-    /// If the function returns an error, the transaction will be rolled back. If it does not return an error, the transaction will be committed.
+    /// If the function returns an error, the transaction will be rolled back. If it does not return an
+    /// error, the transaction will be committed.
     pub async fn transaction<F, R>(&self, callback: F) -> Result<R>
     where
         F: for<'c> FnOnce(
@@ -248,6 +271,7 @@ PRAGMA temp_store=memory; -- Avoid SQLITE_IOERR_GETTEMPPATH errors on Android
         }
     }
 
+    /// Query the database if the requested table already exists.
     pub async fn table_exists(&self, name: impl AsRef<str>) -> Result<bool> {
         let q = format!("PRAGMA table_info(\"{}\")", name.as_ref());
 
@@ -332,7 +356,7 @@ PRAGMA temp_store=memory; -- Avoid SQLITE_IOERR_GETTEMPPATH errors on Android
     pub async fn get_raw_config_int(&self, key: impl AsRef<str>) -> Result<Option<i32>> {
         self.get_raw_config(key)
             .await
-            .map(|s| s.and_then(|s| s.parse().ok()))
+            .map(|s| dbg!(s).and_then(|s| s.parse().ok()))
     }
 
     pub async fn get_raw_config_bool(&self, key: impl AsRef<str>) -> Result<bool> {
