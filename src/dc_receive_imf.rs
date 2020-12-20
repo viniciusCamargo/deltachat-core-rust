@@ -807,7 +807,6 @@ async fn add_parts(
         None
     };
 
-    let mut ids = Vec::with_capacity(mime_parser.parts.len());
     let stmt = "INSERT INTO msgs \
                     (rfc724_mid, server_folder, server_uid, chat_id, from_id, to_id, timestamp, \
                     timestamp_sent, timestamp_rcvd, type, state, msgrmsg,  txt, txt_raw, param, \
@@ -845,6 +844,7 @@ async fn add_parts(
                 EphemeralTimer::Enabled { duration } => rcvd_timestamp + i64::from(duration),
             }
         };
+
         context
             .sql
             .execute(
@@ -875,24 +875,20 @@ async fn add_parts(
                     .bind(ephemeral_timestamp),
             )
             .await?;
-
-        ids.push(MsgId::new(
+        let msg_id = MsgId::new(
             context
                 .sql
                 .get_rowid("msgs", "rfc724_mid", &rfc724_mid)
                 .await?,
-        ));
-    }
+        );
 
-    if let Some(id) = ids.iter().last() {
-        *insert_msg_id = *id;
+        created_db_entries.push((*chat_id, msg_id));
+        *insert_msg_id = msg_id;
     }
 
     if !*hidden {
         chat_id.unarchive(context).await?;
     }
-
-    created_db_entries.extend(ids.iter().map(|id| (*chat_id, *id)));
 
     info!(
         context,
@@ -1237,6 +1233,7 @@ async fn create_or_lookup_group(
 
             ChatId::new(0)
         });
+
         chat_id_blocked = create_blocked;
         recreate_member_list = true;
 
@@ -1444,9 +1441,9 @@ async fn create_or_lookup_adhoc_group(
                LIMIT 1;",
             chat_ids_str
         );
-        let row = context.sql.fetch_one(sqlx::query(&q)).await;
+        let row = context.sql.fetch_optional(sqlx::query(&q)).await?;
 
-        if let Ok(row) = row {
+        if let Some(row) = row {
             // success, chat found
             return Ok((
                 row.try_get(0)?,
@@ -1538,13 +1535,14 @@ async fn create_group_record(
     create_protected: ProtectionStatus,
 ) -> Result<ChatId> {
     context.sql.execute(
-        sqlx::query("INSERT INTO chats (type, name, grpid, blocked, created_timestamp, protected) VALUES(?, ?, ?, ?, ?, ?);").bind(
-            Chattype::Group).bind(
-            grpname.as_ref()).bind(
-            grpid.as_ref()).bind(
-            create_blocked).bind(
-            time()).bind(
-            create_protected)
+        sqlx::query(
+            "INSERT INTO chats (type, name, grpid, blocked, created_timestamp, protected) VALUES(?, ?, ?, ?, ?, ?);")
+            .bind(Chattype::Group)
+            .bind(grpname.as_ref())
+            .bind(grpid.as_ref())
+            .bind(create_blocked)
+            .bind(time())
+            .bind(create_protected)
     ).await?;
 
     let row_id = context

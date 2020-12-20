@@ -47,6 +47,7 @@ impl TestContext {
     /// [Context]: crate::context::Context
     pub async fn new() -> Self {
         use rand::Rng;
+        pretty_env_logger::try_init().ok();
 
         let dir = tempdir().unwrap();
         let dbfile = dir.path().join("db.sqlite");
@@ -54,6 +55,14 @@ impl TestContext {
         let ctx = Context::new("FakeOS".into(), dbfile.into(), id)
             .await
             .unwrap();
+
+        let events = ctx.get_event_emitter();
+        async_std::task::spawn(async move {
+            while let Some(event) = events.recv().await {
+                log::debug!("{:?}", event);
+            }
+        });
+
         Self {
             ctx,
             dir,

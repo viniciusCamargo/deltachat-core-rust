@@ -76,6 +76,7 @@ proptest = "0.10"
 async-std = { version = "1.6.4", features = ["unstable", "attributes"] }
 futures-lite = "1.7.0"
 criterion = "0.3"
+log = "0.4.11"
 
 [workspace]
 members = [

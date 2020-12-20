@@ -24,7 +24,6 @@ pub async fn run(context: &Context, sql: &Sql) -> Result<(bool, bool)> {
                     .await?;
 
                 // set raw config inside the transaction
-                dbg!(dbversion_before_update);
                 sqlx::query("INSERT INTO config (keyname, value) VALUES (?, ?);")
                     .bind(VERSION_CFG)
                     .bind(format!("{}", dbversion_before_update))
@@ -41,7 +40,6 @@ pub async fn run(context: &Context, sql: &Sql) -> Result<(bool, bool)> {
             .await?
             .unwrap_or_default();
     }
-    dbg!(dbversion_before_update);
 
     let dbversion = dbversion_before_update;
     let mut update_icons = !exists_before_update;
