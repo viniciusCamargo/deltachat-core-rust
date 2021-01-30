@@ -23,7 +23,7 @@ use crate::ephemeral::Timer as EphemeralTimer;
 use crate::events::EventType;
 use crate::job::{self, Action};
 use crate::lot::{Lot, LotState, Meaning};
-use crate::mimeparser::{FailureReport, SystemMessage};
+use crate::mimeparser::{parse_message_id, FailureReport, SystemMessage};
 use crate::param::{Param, Params};
 use crate::pgp::split_armored_data;
 use crate::stock::StockMessage;
@@ -303,6 +303,11 @@ pub struct Message {
     pub(crate) ephemeral_timestamp: i64,
     pub(crate) text: Option<String>,
     pub(crate) rfc724_mid: String,
+
+    // In-Reply-To header contents.
+    //
+    // It is not necessarily well-formed and may contain garbage for incoming messages. Parse it
+    // with `crate::mimeparser::parse_message_id()` rather than using directly.
     pub(crate) in_reply_to: Option<String>,
     pub(crate) server_folder: Option<String>,
     pub(crate) server_uid: u32,
@@ -831,7 +836,11 @@ impl Message {
 
     pub async fn quoted_message(&self, context: &Context) -> Result<Option<Message>, Error> {
         if self.param.get(Param::Quote).is_some() {
-            if let Some(in_reply_to) = &self.in_reply_to {
+            if let Some(in_reply_to) = &self
+                .in_reply_to
+                .as_ref()
+                .and_then(|in_reply_to| parse_message_id(in_reply_to).ok())
+            {
                 if let Some((_, _, msg_id)) = rfc724_mid_exists(context, in_reply_to).await? {
                     return Ok(Some(Message::load_from_db(context, msg_id).await?));
                 }
