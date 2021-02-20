@@ -871,6 +871,10 @@ impl Chat {
             if let Ok(image_rel) = get_group_icon(context).await {
                 return Some(dc_get_abs_path(context, image_rel));
             }
+        } else if self.typ == Chattype::Mailinglist {
+            if let Ok(image_rel) = get_mailinglist_icon(context).await {
+                return Some(dc_get_abs_path(context, image_rel));
+            }
         } else if self.typ == Chattype::Single {
             let contacts = get_chat_contacts(context, self.id).await;
             if let Some(contact_id) = contacts.first() {
@@ -1421,6 +1425,25 @@ pub(crate) async fn get_group_icon(context: &Context) -> Result<String, Error> {
     context
         .sql
         .set_raw_config(&context, "icon-group", Some(&icon))
+        .await?;
+    Ok(icon)
+}
+
+pub(crate) async fn get_mailinglist_icon(context: &Context) -> Result<String, Error> {
+    if let Some(icon) = context
+        .sql
+        .get_raw_config(&context, "icon-mailinglist2")
+        .await
+    {
+        return Ok(icon);
+    }
+
+    let icon = include_bytes!("../assets/icon-mailinglist.png");
+    let blob = BlobObject::create(context, "icon-mailinglist.png".to_string(), icon).await?;
+    let icon = blob.as_name().to_string();
+    context
+        .sql
+        .set_raw_config(&context, "icon-mailinglist2", Some(&icon))
         .await?;
     Ok(icon)
 }
