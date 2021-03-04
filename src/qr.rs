@@ -6,7 +6,7 @@ use percent_encoding::percent_decode_str;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
-use crate::chat;
+use crate::chat::{self, ChatIdBlocked};
 use crate::config::Config;
 use crate::constants::Blocked;
 use crate::contact::{addr_normalize, may_be_valid_addr, Contact, Origin};
@@ -164,11 +164,11 @@ async fn decode_openpgp(context: &Context, qr: &str) -> Lot {
             .map(|(id, _)| id)
             .unwrap_or_default();
 
-            let (id, _) = chat::create_or_lookup_by_contact_id(context, lot.id, Blocked::Deaddrop)
-                .await
-                .unwrap_or_default();
-
-            chat::add_info_msg(context, id, format!("{} verified.", peerstate.addr)).await;
+            if let Ok(chat) =
+                ChatIdBlocked::get_for_contact_id(context, lot.id, Blocked::Deaddrop).await
+            {
+                chat::add_info_msg(context, chat.id, format!("{} verified.", peerstate.addr)).await;
+            }
         } else {
             lot.state = LotState::QrFprWithoutAddr;
             lot.text1 = Some(fingerprint.to_string());
