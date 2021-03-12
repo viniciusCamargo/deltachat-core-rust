@@ -8,7 +8,9 @@ use std::{fmt, time::Duration};
 use anyhow::{bail, ensure, format_err, Context as _, Error, Result};
 use async_smtp::smtp::response::{Category, Code, Detail};
 use async_std::task::sleep;
+
 use deltachat_derive::{FromSql, ToSql};
+use futures::StreamExt;
 use itertools::Itertools;
 use rand::{thread_rng, Rng};
 
@@ -725,7 +727,8 @@ impl Job {
     ///
     /// If a copy of the message is present in multiple folders, mvbox
     /// is preferred to inbox, which is in turn preferred to
-    /// sentbox. This is because in the database it is impossible to
+    /// sentbox, which is preferred to other folders.
+    /// This is because in the database it is impossible to
     /// store multiple UIDs for one message, so we prefer to
     /// automatically delete messages in the folders managed by Delta
     /// Chat in contrast to the Sent folder, which is normally managed
@@ -736,26 +739,26 @@ impl Job {
             return Status::RetryLater;
         }
 
-        if let Some(sentbox_folder) = &context.get_config(Config::ConfiguredSentboxFolder).await {
-            job_try!(
-                imap.resync_folder_uids(context, sentbox_folder.to_string())
-                    .await
-            );
+        let configured_folders: Vec<_> = async_std::stream::from_iter(&[
+            Config::ConfiguredSentboxFolder,
+            Config::ConfiguredInboxFolder,
+            Config::ConfiguredMvboxFolder,
+        ])
+        .filter_map(|c| context.get_config(*c))
+        .collect()
+        .await;
+
+        let all_except_configured =
+            job_try!(imap.list_folders_except(context, &configured_folders).await);
+
+        for folder in all_except_configured {
+            job_try!(imap.resync_folder_uids(context, folder).await);
         }
 
-        if let Some(inbox_folder) = &context.get_config(Config::ConfiguredInboxFolder).await {
-            job_try!(
-                imap.resync_folder_uids(context, inbox_folder.to_string())
-                    .await
-            );
+        for folder in configured_folders {
+            job_try!(imap.resync_folder_uids(context, folder).await);
         }
 
-        if let Some(mvbox_folder) = &context.get_config(Config::ConfiguredMvboxFolder).await {
-            job_try!(
-                imap.resync_folder_uids(context, mvbox_folder.to_string())
-                    .await
-            );
-        }
         Status::Finished(Ok(()))
     }
 

@@ -5,7 +5,8 @@ use anyhow::{Context as _, Result};
 use crate::config::Config;
 use crate::context::Context;
 use crate::imap::Imap;
-use async_std::prelude::*;
+
+use futures::stream::StreamExt;
 
 use super::{get_folder_meaning, get_folder_meaning_by_name, FolderMeaning};
 
@@ -84,6 +85,34 @@ impl Imap {
 
         last_scan.replace(Instant::now());
         Ok(())
+    }
+
+    pub async fn list_folders_except(
+        self: &mut Imap,
+        context: &Context,
+        exclude: &[impl AsRef<str>],
+    ) -> Result<Vec<String>> {
+        let exclude = &exclude.iter().map(|s| s.as_ref()).collect::<Vec<_>>();
+        let session = self.session.as_mut();
+        let session = session.context("list_folders_except() IMAP No Connection established")?;
+        let list = session
+            .list(Some(""), Some("*"))
+            .await?
+            .filter_map(|f| async move {
+                if let Err(e) = &f {
+                    warn!(context, "list_folders_except can't get folder: {}", e);
+                };
+                f.ok()
+            })
+            .filter_map(|f| async move {
+                let name = f.name();
+                if exclude.contains(&name) {
+                    None
+                } else {
+                    Some(name.to_string())
+                }
+            });
+        Ok(list.collect().await)
     }
 }
 
