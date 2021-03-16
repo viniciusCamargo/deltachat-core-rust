@@ -38,6 +38,8 @@
 
 - api removed: `dc_contact_get_first_name()` #2165 #2171
 
+- correctly show emails that were sent to an alias and then bounced 
+
 - implement Consistent Color Generation (XEP-0392),
   that results in contact colors be be changed #2228 #2229 #2239
 
